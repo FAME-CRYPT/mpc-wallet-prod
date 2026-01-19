@@ -1,0 +1,16 @@
+Benchmark Results - 19 Oca 2026 Pzt 15:58:13
+================================
+
+mtls-sharedmem:
+  Throughput: 5 votes/sec
+  Avg Latency: 195449 μs
+  Success Rate: 200/200
+
+mtls-with-mtls:
+  Throughput: 5 votes/sec
+  Avg Latency: 193587 μs
+  Success Rate: 200/200
+
+Comparison:
+  Throughput Difference: 0%
+  Latency Difference: 0%

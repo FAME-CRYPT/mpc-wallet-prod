@@ -1,0 +1,13 @@
+[package]
+name = "threshold-crypto"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+threshold-types = { path = "../types" }
+ed25519-dalek.workspace = true
+sha2.workspace = true
+rand.workspace = true
+serde.workspace = true
+thiserror.workspace = true

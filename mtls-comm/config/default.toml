@@ -1,0 +1,33 @@
+[node]
+node_id = 1
+listen_addr = "0.0.0.0:9000"
+
+[mtls]
+ca_cert_path = "certs/ca.crt"
+node_cert_path = "certs/node1.crt"
+node_key_path = "certs/node1.key"
+tls_version = "1.3"  # Enforce TLS 1.3
+
+[network]
+bootstrap_peers = [
+    "172.18.0.22:9000",  # node-2
+    "172.18.0.23:9000",  # node-3
+]
+heartbeat_interval_secs = 30
+reconnect_delay_secs = 5
+
+[consensus]
+total_nodes = 5
+threshold = 4
+vote_timeout_secs = 300
+
+[etcd]
+endpoints = [
+    "http://etcd-1:2379",
+    "http://etcd-2:2379",
+    "http://etcd-3:2379"
+]
+
+[postgres]
+url = "postgresql://mpc:mpc_password@postgres:5432/mpc_wallet"
+max_connections = 10

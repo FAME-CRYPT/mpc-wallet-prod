@@ -1,0 +1,46 @@
+# Multi-stage build for mTLS threshold voting node
+
+FROM rust:slim AS builder
+
+WORKDIR /app
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y \
+    pkg-config \
+    libssl-dev \
+    protobuf-compiler \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy workspace files
+COPY Cargo.toml Cargo.lock ./
+COPY crates ./crates
+COPY src ./src
+COPY config ./config
+
+# Build release binary
+RUN cargo build --release
+
+# Runtime stage (must match builder's Debian version for GLIBC compatibility)
+FROM debian:trixie-slim
+
+WORKDIR /app
+
+# Install runtime dependencies
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    libssl3 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy binary from builder
+COPY --from=builder /app/target/release/threshold-voting /app/threshold-voting
+
+# Copy default config
+COPY config/default.toml /app/config/default.toml
+
+# Create certs directory (will be mounted)
+RUN mkdir -p /certs
+
+EXPOSE 9000
+
+ENTRYPOINT ["/app/threshold-voting"]
+CMD ["run"]

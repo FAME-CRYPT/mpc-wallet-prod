@@ -1,0 +1,20 @@
+[package]
+name = "threshold-storage"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+threshold-types = { path = "../types" }
+etcd-client.workspace = true
+tokio-postgres.workspace = true
+deadpool-postgres.workspace = true
+tokio.workspace = true
+futures.workspace = true
+async-trait.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true

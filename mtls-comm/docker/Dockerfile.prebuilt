@@ -1,0 +1,29 @@
+# Simplified Dockerfile using pre-built binary
+# Build binary first with: cargo build --release
+
+FROM debian:bookworm-slim
+
+WORKDIR /app
+
+# Install runtime dependencies only
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    libssl3 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy pre-built binary from host
+COPY target/release/threshold-voting.exe /app/threshold-voting
+
+# Make it executable (in case permissions were lost)
+RUN chmod +x /app/threshold-voting
+
+# Copy default config
+COPY config/default.toml /app/config/default.toml
+
+# Create certs directory (will be mounted)
+RUN mkdir -p /certs
+
+EXPOSE 9000
+
+ENTRYPOINT ["/app/threshold-voting"]
+CMD ["run"]

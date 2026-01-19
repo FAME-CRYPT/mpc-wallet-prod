@@ -1,0 +1,99 @@
+version: '3.8'
+
+services:
+  # API Gateway - single instance
+  # Accepts external signing requests and returns results
+  api-gateway:
+    build:
+      context: ./api-gateway
+      dockerfile: Dockerfile
+    container_name: api-gateway
+    ports:
+      # Expose port 8000 to host for external access
+      - "8000:8000"
+    environment:
+      - PORT=8000
+      - MESSAGE_BOARD_URL=http://message-board:8080
+    networks:
+      - threshold-net
+    depends_on:
+      - message-board
+
+  # MessageBoard - single instance
+  # Central coordination point for nodes to exchange messages
+  message-board:
+    build:
+      context: ./message-board
+      dockerfile: Dockerfile
+    container_name: message-board
+    environment:
+      - PORT=8080
+    networks:
+      - threshold-net
+
+  # Node 1 - first threshold signing node
+  node-1:
+    build:
+      context: ./node
+      dockerfile: Dockerfile
+    container_name: node-1
+    environment:
+      - NODE_ID=node-1
+      - MESSAGE_BOARD_URL=http://message-board:8080
+      - RUST_LOG=info
+    networks:
+      - threshold-net
+    depends_on:
+      - message-board
+
+  # Node 2 - second threshold signing node
+  node-2:
+    build:
+      context: ./node
+      dockerfile: Dockerfile
+    container_name: node-2
+    environment:
+      - NODE_ID=node-2
+      - MESSAGE_BOARD_URL=http://message-board:8080
+      - RUST_LOG=info
+    networks:
+      - threshold-net
+    depends_on:
+      - message-board
+
+  # Node 3 - third threshold signing node
+  node-3:
+    build:
+      context: ./node
+      dockerfile: Dockerfile
+    container_name: node-3
+    environment:
+      - NODE_ID=node-3
+      - MESSAGE_BOARD_URL=http://message-board:8080
+      - RUST_LOG=info
+    networks:
+      - threshold-net
+    depends_on:
+      - message-board
+
+  # Node 4 - fourth threshold signing node
+  # With 3-of-4 threshold, any 3 nodes can create a signature
+  node-4:
+    build:
+      context: ./node
+      dockerfile: Dockerfile
+    container_name: node-4
+    environment:
+      - NODE_ID=node-4
+      - MESSAGE_BOARD_URL=http://message-board:8080
+      - RUST_LOG=info
+    networks:
+      - threshold-net
+    depends_on:
+      - message-board
+
+# Internal network for container communication
+# Containers can communicate using service names as hostnames
+networks:
+  threshold-net:
+    driver: bridge

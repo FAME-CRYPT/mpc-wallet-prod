@@ -1,0 +1,76 @@
+[workspace]
+members = [
+    "crates/types",
+    "crates/crypto",
+    "crates/storage",
+    "crates/consensus",
+    "crates/network",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["MPC Wallet Team"]
+rust-version = "1.70"
+
+[workspace.dependencies]
+# mTLS core - replaces libp2p
+rustls = { version = "0.23", features = ["std", "ring"] }
+tokio-rustls = "0.26"
+rustls-pemfile = "2.1"
+x509-parser = "0.16"
+
+# Async runtime
+tokio = { version = "1.35", features = ["full"] }
+tokio-stream = "0.1"
+
+# Storage (unchanged from p2p-comm)
+etcd-client = "0.13"
+tokio-postgres = { version = "0.7", features = ["with-serde_json-1", "with-chrono-0_4"] }
+deadpool-postgres = "0.12"
+
+# Crypto (unchanged from p2p-comm)
+ed25519-dalek = { version = "2.1", features = ["rand_core"] }
+sha2 = "0.10"
+rand = "0.8"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Utilities
+anyhow = "1.0"
+thiserror = "1.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+clap = { version = "4.4", features = ["derive"] }
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1.6", features = ["v4", "v5", "serde"] }
+config = "0.14"
+async-trait = "0.1"
+futures = "0.3"
+
+[package]
+name = "threshold-voting"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# Internal crates
+threshold-types = { path = "crates/types" }
+threshold-crypto = { path = "crates/crypto" }
+threshold-storage = { path = "crates/storage" }
+threshold-consensus = { path = "crates/consensus" }
+threshold-network = { path = "crates/network" }
+
+# Workspace dependencies
+tokio = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+clap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+config = { workspace = true }
+chrono = { workspace = true }
+rustls = { workspace = true }

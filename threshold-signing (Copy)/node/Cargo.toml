@@ -1,0 +1,50 @@
+[package]
+name = "threshold-node"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# Threshold signing using CGGMP24 protocol
+# Enable curve-secp256k1 feature to use Secp256k1 curve
+cggmp24 = { version = "0.7.0-alpha.2", features = ["curve-secp256k1"] }
+cggmp24-keygen = "0.7.0-alpha.2"
+
+# HTTP client for communicating with MessageBoard
+# Use rustls-tls instead of default-tls to avoid OpenSSL dependency
+reqwest = { version = "0.12", features = ["json", "rustls-tls", "blocking"], default-features = false }
+
+# JSON serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Async runtime
+tokio = { version = "1.0", features = ["full"] }
+
+# Logging
+env_logger = "0.11"
+log = "0.4"
+
+# Error handling
+anyhow = "1.0"
+
+# Hex encoding for signatures
+hex = "0.4"
+
+# Cryptographic hash functions
+sha2 = "0.10"
+
+# Random number generation
+rand = "0.8"
+
+# Round-based protocols (required by cggmp24)
+round-based = "0.4"
+
+# Futures for async Stream/Sink
+futures = "0.3"
+
+# Generic elliptic curves (cggmp24 re-exports this)
+# Use the version compatible with cggmp24
+generic-ec = "0.4"
+
+# CLI argument parsing for verify-signature tool
+structopt = "0.3"
