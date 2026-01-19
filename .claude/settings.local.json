@@ -46,7 +46,9 @@
       "Bash(NODE_ID=1 RUST_LOG=error target/release/threshold-voting-system.exe vote:*)",
       "Bash(chmod:*)",
       "Bash(bash:*)",
-      "Bash(test:*)"
+      "Bash(test:*)",
+      "Bash(Remove-Item -Recurse -Force \"c:\\\\Users\\\\user\\\\Desktop\\\\MPC-WALLET\\\\p2p-comm\\\\.git\")",
+      "Bash(Remove-Item -Recurse -Force \"c:\\\\Users\\\\user\\\\Desktop\\\\MPC-WALLET\\\\torcus-wallet\\\\.git\")"
     ]
   }
 }
