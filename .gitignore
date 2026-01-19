@@ -1,0 +1,34 @@
+# Rust build artifacts
+target/
+**/*.rs.bk
+*.pdb
+
+# Cargo lock file (for binaries, keep for libraries)
+Cargo.lock
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+.AppleDouble
+.LSOverride
+
+# Debug files
+*.dSYM/
+*.su
+*.idb
+
+# Test coverage
+*.profraw
+*.profdata
+
+# Flamegraph
+flamegraph.svg
+perf.data
+perf.data.old
