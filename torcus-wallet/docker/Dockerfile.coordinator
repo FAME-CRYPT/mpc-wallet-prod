@@ -1,0 +1,27 @@
+# Build stage
+FROM rustlang/rust:nightly-bookworm AS builder
+
+WORKDIR /app
+
+# Copy the entire workspace
+COPY . .
+
+# Build the coordinator binary
+RUN cargo build --release --bin coordinator
+
+# Runtime stage
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy the binary from builder
+COPY --from=builder /app/target/release/coordinator /app/coordinator
+
+EXPOSE 3000
+
+CMD ["/app/coordinator"]

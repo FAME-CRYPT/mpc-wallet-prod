@@ -1,0 +1,200 @@
+services:
+  # Bitcoin Core node running in regtest mode
+  bitcoind:
+    image: lncm/bitcoind:v27.0
+    container_name: bitcoind-regtest
+    command:
+      - -regtest
+      - -server
+      - -txindex
+      - -rpcuser=bitcoin
+      - -rpcpassword=bitcoin
+      - -rpcallowip=0.0.0.0/0
+      - -rpcbind=0.0.0.0
+      - -fallbackfee=0.0001
+      - -maxtxfee=1
+    ports:
+      - "18443:18443" # RPC port for regtest
+      - "18444:18444" # P2P port for regtest
+    volumes:
+      - bitcoind-data:/data/.bitcoin
+    networks:
+      - mpc-network
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "bitcoin-cli",
+          "-regtest",
+          "-rpcuser=bitcoin",
+          "-rpcpassword=bitcoin",
+          "getblockchaininfo",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # Coordinator service
+  coordinator:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.coordinator
+    container_name: mpc-coordinator
+    ports:
+      - "3000:3000"
+    volumes:
+      - coordinator-data:/data
+    environment:
+      - RUST_LOG=debug,hyper=info,hyper_util=info,tower=info,reqwest=info,rustls=info,h2=info
+      # Bitcoin network: "regtest" (local bitcoind) or "testnet" (Blockstream API)
+      - BITCOIN_NETWORK=${BITCOIN_NETWORK:-regtest}
+      - BITCOIN_RPC_URL=http://bitcoind:18443
+      - BITCOIN_RPC_USER=bitcoin
+      - BITCOIN_RPC_PASSWORD=bitcoin
+    networks:
+      - mpc-network
+    depends_on:
+      mpc-node-1:
+        condition: service_started
+      mpc-node-2:
+        condition: service_started
+      mpc-node-3:
+        condition: service_started
+      mpc-node-4:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # MPC Node 1
+  mpc-node-1:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.node
+    container_name: mpc-node-1
+    command: ["/app/node", "--party-index", "1"]
+    ports:
+      - "3001:3000"
+      - "4001:4001/udp" # QUIC P2P port
+    volumes:
+      - node1-data:/data
+    environment:
+      - RUST_LOG=debug,hyper=info,hyper_util=info,tower=info,reqwest=info,rustls=info,h2=info
+      # Set to "false" to generate primes on startup (takes 30-120s per node)
+      # Once generated, primes are persisted in /data and reused on restart
+      - SKIP_PRIMES=${SKIP_PRIMES:-true}
+      # P2P configuration
+      - P2P_ENABLED=true
+      - QUIC_PORT=4001
+    networks:
+      - mpc-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      # Extended start period to allow for prime generation (up to 2 minutes)
+      start_period: 150s
+
+  # MPC Node 2
+  mpc-node-2:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.node
+    container_name: mpc-node-2
+    command: ["/app/node", "--party-index", "2"]
+    ports:
+      - "3002:3000"
+      - "4002:4001/udp" # QUIC P2P port
+    volumes:
+      - node2-data:/data
+    environment:
+      - RUST_LOG=debug,hyper=info,hyper_util=info,tower=info,reqwest=info,rustls=info,h2=info
+      - SKIP_PRIMES=${SKIP_PRIMES:-true}
+      # P2P configuration
+      - P2P_ENABLED=true
+      - QUIC_PORT=4001
+    networks:
+      - mpc-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 150s
+
+  # MPC Node 3
+  mpc-node-3:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.node
+    container_name: mpc-node-3
+    command: ["/app/node", "--party-index", "3"]
+    ports:
+      - "3003:3000"
+      - "4003:4001/udp" # QUIC P2P port
+    volumes:
+      - node3-data:/data
+    environment:
+      - RUST_LOG=debug,hyper=info,hyper_util=info,tower=info,reqwest=info,rustls=info,h2=info
+      - SKIP_PRIMES=${SKIP_PRIMES:-true}
+      # P2P configuration
+      - P2P_ENABLED=true
+      - QUIC_PORT=4001
+    networks:
+      - mpc-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 150s
+
+  # MPC Node 4
+  mpc-node-4:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.node
+    container_name: mpc-node-4
+    command: ["/app/node", "--party-index", "4"]
+    ports:
+      - "3004:3000"
+      - "4004:4001/udp" # QUIC P2P port
+    volumes:
+      - node4-data:/data
+    environment:
+      - RUST_LOG=debug,hyper=info,hyper_util=info,tower=info,reqwest=info,rustls=info,h2=info
+      - SKIP_PRIMES=${SKIP_PRIMES:-true}
+      # P2P configuration
+      - P2P_ENABLED=true
+      - QUIC_PORT=4001
+    networks:
+      - mpc-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 150s
+
+networks:
+  mpc-network:
+    driver: bridge
+
+volumes:
+  bitcoind-data:
+    name: bitcoind-regtest-data
+  coordinator-data:
+    name: mpc-coordinator-data
+  node1-data:
+    name: mpc-node1-data
+  node2-data:
+    name: mpc-node2-data
+  node3-data:
+    name: mpc-node3-data
+  node4-data:
+    name: mpc-node4-data

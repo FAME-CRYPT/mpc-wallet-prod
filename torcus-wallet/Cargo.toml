@@ -1,0 +1,68 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/cli",
+    "crates/coordinator",
+    "crates/node",
+    "crates/common",
+    "crates/chains",
+    "crates/protocols",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[workspace.dependencies]
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+axum = "0.8"
+reqwest = { version = "0.12", features = ["json"] }
+clap = { version = "4", features = ["derive", "env"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+thiserror = "2"
+anyhow = "1"
+hex = "0.4"
+
+# Elliptic curve cryptography
+generic-ec = { version = "0.4", features = ["serde", "curve-secp256k1"] }
+rand = "0.8"
+rand_core = "0.6"
+rand_chacha = "0.3"
+
+# CGGMP24 Threshold ECDSA - production grade
+cggmp24 = { version = "0.7.0-alpha.3", features = ["curve-secp256k1", "state-machine"] }
+cggmp24-keygen = { version = "0.7.0-alpha.3", features = ["state-machine"] }
+key-share = { version = "0.6", features = ["serde"] }
+round-based = "0.4"
+
+# FROST Threshold Schnorr signatures (for Taproot)
+# Using ciphersuite-bitcoin for BIP-340 compliant signatures
+givre = { version = "0.2", features = ["cggmp21-keygen", "full-signing", "serde", "ciphersuite-bitcoin"] }
+
+# Bitcoin dependencies
+bitcoin = { version = "0.32", features = ["serde"] }
+sha2 = "0.10"
+
+# Async utilities
+futures = "0.3"
+tokio-stream = "0.1"
+
+# Serialization
+bincode = "1.3"
+
+# Ed25519 signatures (for grant signing)
+ed25519-dalek = { version = "2", features = ["serde", "rand_core"] }
+
+# Constant-time comparison for secrets
+subtle = "2.5"
+
+# QUIC transport (P2P messaging)
+quinn = "0.11"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+rcgen = "0.13"
+webpki-roots = "0.26"

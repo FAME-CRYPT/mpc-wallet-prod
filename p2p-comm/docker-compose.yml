@@ -1,0 +1,237 @@
+version: '3.8'
+
+services:
+  # etcd cluster (3 nodes for Raft consensus)
+  etcd1:
+    image: quay.io/coreos/etcd:v3.5.12
+    container_name: etcd1
+    environment:
+      - ETCD_NAME=etcd1
+      - ETCD_INITIAL_ADVERTISE_PEER_URLS=http://etcd1:2380
+      - ETCD_LISTEN_PEER_URLS=http://0.0.0.0:2380
+      - ETCD_LISTEN_CLIENT_URLS=http://0.0.0.0:2379
+      - ETCD_ADVERTISE_CLIENT_URLS=http://etcd1:2379
+      - ETCD_INITIAL_CLUSTER_TOKEN=etcd-cluster
+      - ETCD_INITIAL_CLUSTER=etcd1=http://etcd1:2380,etcd2=http://etcd2:2380,etcd3=http://etcd3:2380
+      - ETCD_INITIAL_CLUSTER_STATE=new
+    ports:
+      - "2379:2379"
+      - "2380:2380"
+    volumes:
+      - etcd1_data:/etcd-data
+    networks:
+      - threshold-network
+
+  etcd2:
+    image: quay.io/coreos/etcd:v3.5.12
+    container_name: etcd2
+    environment:
+      - ETCD_NAME=etcd2
+      - ETCD_INITIAL_ADVERTISE_PEER_URLS=http://etcd2:2380
+      - ETCD_LISTEN_PEER_URLS=http://0.0.0.0:2380
+      - ETCD_LISTEN_CLIENT_URLS=http://0.0.0.0:2379
+      - ETCD_ADVERTISE_CLIENT_URLS=http://etcd2:2379
+      - ETCD_INITIAL_CLUSTER_TOKEN=etcd-cluster
+      - ETCD_INITIAL_CLUSTER=etcd1=http://etcd1:2380,etcd2=http://etcd2:2380,etcd3=http://etcd3:2380
+      - ETCD_INITIAL_CLUSTER_STATE=new
+    ports:
+      - "2389:2379"
+      - "2390:2380"
+    volumes:
+      - etcd2_data:/etcd-data
+    networks:
+      - threshold-network
+
+  etcd3:
+    image: quay.io/coreos/etcd:v3.5.12
+    container_name: etcd3
+    environment:
+      - ETCD_NAME=etcd3
+      - ETCD_INITIAL_ADVERTISE_PEER_URLS=http://etcd3:2380
+      - ETCD_LISTEN_PEER_URLS=http://0.0.0.0:2380
+      - ETCD_LISTEN_CLIENT_URLS=http://0.0.0.0:2379
+      - ETCD_ADVERTISE_CLIENT_URLS=http://etcd3:2379
+      - ETCD_INITIAL_CLUSTER_TOKEN=etcd-cluster
+      - ETCD_INITIAL_CLUSTER=etcd1=http://etcd1:2380,etcd2=http://etcd2:2380,etcd3=http://etcd3:2380
+      - ETCD_INITIAL_CLUSTER_STATE=new
+    ports:
+      - "2399:2379"
+      - "2400:2380"
+    volumes:
+      - etcd3_data:/etcd-data
+    networks:
+      - threshold-network
+
+  # PostgreSQL for persistence
+  postgres:
+    image: postgres:16-alpine
+    container_name: threshold-postgres
+    environment:
+      - POSTGRES_USER=threshold
+      - POSTGRES_PASSWORD=threshold_pass
+      - POSTGRES_DB=threshold_voting
+    ports:
+      - "54320:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init-db.sh:/docker-entrypoint-initdb.d/init-db.sh
+    networks:
+      - threshold-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U threshold -d threshold_voting"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Threshold voting nodes
+  node1:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: threshold-node1
+    environment:
+      - NODE_ID=node_1
+      - PEER_ID=peer_1
+      - LISTEN_ADDR=/ip4/0.0.0.0/tcp/9000
+      - ETCD_ENDPOINTS=http://etcd1:2379,http://etcd2:2379,http://etcd3:2379
+      - POSTGRES_URL=postgresql://threshold:threshold_pass@postgres:5432/threshold_voting
+      - TOTAL_NODES=5
+      - THRESHOLD=4
+      - VOTE_TIMEOUT_SECS=300
+      - BOOTSTRAP_PEERS=
+    ports:
+      - "9001:9000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      etcd1:
+        condition: service_started
+      etcd2:
+        condition: service_started
+      etcd3:
+        condition: service_started
+    networks:
+      threshold-network:
+        ipv4_address: 172.25.0.11
+    restart: unless-stopped
+
+  node2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: threshold-node2
+    environment:
+      - NODE_ID=node_2
+      - PEER_ID=peer_2
+      - LISTEN_ADDR=/ip4/0.0.0.0/tcp/9000
+      - ETCD_ENDPOINTS=http://etcd1:2379,http://etcd2:2379,http://etcd3:2379
+      - POSTGRES_URL=postgresql://threshold:threshold_pass@postgres:5432/threshold_voting
+      - TOTAL_NODES=5
+      - THRESHOLD=4
+      - VOTE_TIMEOUT_SECS=300
+      - BOOTSTRAP_PEERS=/ip4/172.25.0.11/tcp/9000
+    ports:
+      - "9002:9000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      node1:
+        condition: service_started
+    networks:
+      threshold-network:
+        ipv4_address: 172.25.0.12
+    restart: unless-stopped
+
+  node3:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: threshold-node3
+    environment:
+      - NODE_ID=node_3
+      - PEER_ID=peer_3
+      - LISTEN_ADDR=/ip4/0.0.0.0/tcp/9000
+      - ETCD_ENDPOINTS=http://etcd1:2379,http://etcd2:2379,http://etcd3:2379
+      - POSTGRES_URL=postgresql://threshold:threshold_pass@postgres:5432/threshold_voting
+      - TOTAL_NODES=5
+      - THRESHOLD=4
+      - VOTE_TIMEOUT_SECS=300
+      - BOOTSTRAP_PEERS=/ip4/172.25.0.11/tcp/9000
+    ports:
+      - "9003:9000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      node1:
+        condition: service_started
+    networks:
+      threshold-network:
+        ipv4_address: 172.25.0.13
+    restart: unless-stopped
+
+  node4:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: threshold-node4
+    environment:
+      - NODE_ID=node_4
+      - PEER_ID=peer_4
+      - LISTEN_ADDR=/ip4/0.0.0.0/tcp/9000
+      - ETCD_ENDPOINTS=http://etcd1:2379,http://etcd2:2379,http://etcd3:2379
+      - POSTGRES_URL=postgresql://threshold:threshold_pass@postgres:5432/threshold_voting
+      - TOTAL_NODES=5
+      - THRESHOLD=4
+      - VOTE_TIMEOUT_SECS=300
+      - BOOTSTRAP_PEERS=/ip4/172.25.0.11/tcp/9000
+    ports:
+      - "9004:9000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      node1:
+        condition: service_started
+    networks:
+      threshold-network:
+        ipv4_address: 172.25.0.14
+    restart: unless-stopped
+
+  node5:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: threshold-node5
+    environment:
+      - NODE_ID=node_5
+      - PEER_ID=peer_5
+      - LISTEN_ADDR=/ip4/0.0.0.0/tcp/9000
+      - ETCD_ENDPOINTS=http://etcd1:2379,http://etcd2:2379,http://etcd3:2379
+      - POSTGRES_URL=postgresql://threshold:threshold_pass@postgres:5432/threshold_voting
+      - TOTAL_NODES=5
+      - THRESHOLD=4
+      - VOTE_TIMEOUT_SECS=300
+      - BOOTSTRAP_PEERS=/ip4/172.25.0.11/tcp/9000
+    ports:
+      - "9005:9000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      node1:
+        condition: service_started
+    networks:
+      threshold-network:
+        ipv4_address: 172.25.0.15
+    restart: unless-stopped
+
+volumes:
+  etcd1_data:
+  etcd2_data:
+  etcd3_data:
+  postgres_data:
+
+networks:
+  threshold-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.25.0.0/16

@@ -1,0 +1,18 @@
+{
+  "name": "mpc-wallet-ui",
+  "version": "1.0.0",
+  "description": "Web UI for MPC Wallet",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "keywords": [
+    "mpc",
+    "wallet",
+    "bitcoin",
+    "threshold-signatures"
+  ],
+  "author": "",
+  "license": "MIT"
+}

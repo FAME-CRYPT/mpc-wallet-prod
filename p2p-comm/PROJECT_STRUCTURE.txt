@@ -1,0 +1,124 @@
+threshold-voting-system/
+│
+├── Cargo.toml                          # Workspace + main binary configuration
+├── Cargo.lock                          # Dependency lock file
+│
+├── README.md                           # Complete project documentation
+├── QUICKSTART.md                       # Quick start guide
+├── IMPLEMENTATION_STATUS.md            # Implementation status report
+├── PROJECT_STRUCTURE.txt               # This file
+│
+├── guide.tex                           # 42-page architecture specification
+├── implementation_guide.pdf            # PDF version of architecture
+│
+├── docker-compose.yml                  # Multi-node deployment (5 nodes + etcd + postgres)
+├── Dockerfile                          # Container image definition
+├── .dockerignore                       # Docker build exclusions
+│
+├── config/
+│   └── default.toml                    # Default configuration template
+│
+├── scripts/
+│   ├── setup-protobuf.sh              # Automated protobuf installation
+│   └── test-scenario.sh               # Automated test scenarios
+│
+├── src/                                # Main application binary
+│   ├── main.rs                        # CLI interface (run, vote commands)
+│   ├── app.rs                         # Application core logic
+│   └── config.rs                      # Configuration management
+│
+└── crates/                             # Modular crate structure
+    │
+    ├── types/                          # Core type definitions
+    │   ├── Cargo.toml
+    │   └── src/
+    │       └── lib.rs                  # Vote, TransactionId, NodeId, PeerId
+    │                                   # ByzantineViolationType, TransactionState
+    │                                   # SystemConfig, VotingError
+    │
+    ├── crypto/                         # Cryptography operations
+    │   ├── Cargo.toml
+    │   └── src/
+    │       └── lib.rs                  # Ed25519 KeyPair, signature verification
+    │                                   # Vote verification, SHA-256 hashing
+    │
+    ├── storage/                        # Dual storage layer
+    │   ├── Cargo.toml
+    │   └── src/
+    │       ├── lib.rs                  # Module exports
+    │       ├── etcd.rs                 # etcd integration
+    │       │                           # - Atomic vote counters
+    │       │                           # - Double-vote detection
+    │       │                           # - Distributed locks
+    │       │                           # - Node banning
+    │       │                           # - Configuration storage
+    │       └── postgres.rs             # PostgreSQL integration
+    │                                   # - Vote history
+    │                                   # - Byzantine violations
+    │                                   # - Node reputation
+    │                                   # - Schema initialization
+    │
+    ├── network/                        # P2P networking layer
+    │   ├── Cargo.toml
+    │   └── src/
+    │       ├── lib.rs                  # Module exports
+    │       ├── messages.rs             # NetworkMessage, VoteMessage
+    │       ├── behavior.rs             # libp2p behavior
+    │       │                           # - GossipSub (broadcast)
+    │       │                           # - Kademlia DHT (discovery)
+    │       │                           # - Identify (peer info)
+    │       │                           # - Ping (keepalive)
+    │       └── node.rs                 # P2P node implementation
+    │                                   # - Noise Protocol encryption
+    │                                   # - TCP + Yamux transport
+    │                                   # - Vote broadcasting
+    │                                   # - Connection management
+    │
+    └── consensus/                      # Byzantine detection & FSM
+        ├── Cargo.toml
+        └── src/
+            ├── lib.rs                  # Module exports
+            ├── byzantine.rs            # Byzantine detector
+            │                           # - Type 1: Double-voting
+            │                           # - Type 2: Minority attack
+            │                           # - Type 3: Invalid signature
+            │                           # - Type 4: Silent failure
+            │                           # - Node banning
+            │                           # - Threshold checking
+            ├── fsm.rs                  # Finite State Machine
+            │                           # - VoteState transitions
+            │                           # - State validation
+            │                           # - Terminal state detection
+            └── vote_processor.rs       # Vote processing orchestrator
+                                        # - FSM registry
+                                        # - Byzantine detection integration
+                                        # - Consensus result tracking
+
+DOCKER SERVICES:
+├── etcd1, etcd2, etcd3                # 3-node Raft cluster for coordination
+├── postgres                           # PostgreSQL for persistence
+└── node1, node2, node3, node4, node5  # 5 threshold voting nodes
+
+KEY FEATURES:
+✅ Byzantine Fault Tolerance (4 types)
+✅ Atomic vote counting (O(1))
+✅ Thread-safe coordination
+✅ State machine (FSM)
+✅ P2P networking (libp2p + Noise)
+✅ Efficient broadcast (GossipSub)
+✅ Configurable N & t parameters
+✅ Docker deployment
+✅ CLI interface
+✅ Automated testing
+
+TECHNOLOGY STACK:
+- Language: Rust 1.75+
+- Networking: libp2p (Noise, GossipSub, Kademlia)
+- Coordination: etcd (Raft consensus)
+- Persistence: PostgreSQL
+- Crypto: Ed25519 (ed25519-dalek)
+- Async: tokio
+- CLI: clap
+- Logging: tracing
+- Config: config-rs
+- Containers: Docker & Docker Compose

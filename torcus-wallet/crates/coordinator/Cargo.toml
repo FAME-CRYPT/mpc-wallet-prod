@@ -1,0 +1,32 @@
+[package]
+name = "coordinator"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "coordinator"
+path = "src/main.rs"
+
+[dependencies]
+common = { path = "../common" }
+chains = { path = "../chains" }
+protocols = { path = "../protocols" }
+tokio.workspace = true
+axum.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+reqwest.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true
+anyhow.workspace = true
+hex.workspace = true
+futures.workspace = true
+bitcoin.workspace = true
+chrono = { version = "0.4", features = ["serde"] }
+generic-ec.workspace = true
+rand.workspace = true
+ed25519-dalek.workspace = true
+tower-http = { version = "0.6", features = ["cors"] }
+sha2.workspace = true
+subtle.workspace = true

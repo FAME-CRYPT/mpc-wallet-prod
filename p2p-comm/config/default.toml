@@ -1,0 +1,20 @@
+[node]
+node_id = "node_1"
+peer_id = "peer_1"
+listen_addr = "/ip4/0.0.0.0/tcp/9000"
+
+[network]
+bootstrap_peers = []
+
+[storage]
+etcd_endpoints = ["http://127.0.0.1:2379"]
+postgres_url = "postgresql://threshold:threshold_pass@localhost:5432/threshold_voting"
+
+[consensus]
+total_nodes = 5
+threshold = 4
+vote_timeout_secs = 300
+
+[logging]
+level = "info"
+format = "json"

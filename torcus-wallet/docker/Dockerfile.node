@@ -1,0 +1,28 @@
+# Build stage
+FROM rustlang/rust:nightly-bookworm AS builder
+
+WORKDIR /app
+
+# Copy the entire workspace
+COPY . .
+
+# Build the node binary
+RUN cargo build --release --bin node
+
+# Runtime stage
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy the binary from builder
+COPY --from=builder /app/target/release/node /app/node
+
+EXPOSE 3000
+
+# Default command (party-index should be overridden via docker-compose)
+CMD ["/app/node", "--party-index", "1"]
