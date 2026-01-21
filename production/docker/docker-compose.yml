@@ -1,0 +1,437 @@
+version: '3.8'
+
+services:
+  # etcd cluster for distributed coordination
+  etcd-1:
+    image: quay.io/coreos/etcd:v3.5.11
+    container_name: mpc-etcd-1
+    restart: unless-stopped
+    networks:
+      - mpc-internal
+    environment:
+      - ETCD_NAME=etcd-1
+      - ETCD_INITIAL_ADVERTISE_PEER_URLS=http://etcd-1:2380
+      - ETCD_LISTEN_PEER_URLS=http://0.0.0.0:2380
+      - ETCD_LISTEN_CLIENT_URLS=http://0.0.0.0:2379
+      - ETCD_ADVERTISE_CLIENT_URLS=http://etcd-1:2379
+      - ETCD_INITIAL_CLUSTER=etcd-1=http://etcd-1:2380,etcd-2=http://etcd-2:2380,etcd-3=http://etcd-3:2380
+      - ETCD_INITIAL_CLUSTER_STATE=new
+      - ETCD_INITIAL_CLUSTER_TOKEN=mpc-wallet-cluster
+      - ETCD_HEARTBEAT_INTERVAL=250
+      - ETCD_ELECTION_TIMEOUT=1250
+    volumes:
+      - etcd-1-data:/etcd-data
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 256M
+
+  etcd-2:
+    image: quay.io/coreos/etcd:v3.5.11
+    container_name: mpc-etcd-2
+    restart: unless-stopped
+    networks:
+      - mpc-internal
+    environment:
+      - ETCD_NAME=etcd-2
+      - ETCD_INITIAL_ADVERTISE_PEER_URLS=http://etcd-2:2380
+      - ETCD_LISTEN_PEER_URLS=http://0.0.0.0:2380
+      - ETCD_LISTEN_CLIENT_URLS=http://0.0.0.0:2379
+      - ETCD_ADVERTISE_CLIENT_URLS=http://etcd-2:2379
+      - ETCD_INITIAL_CLUSTER=etcd-1=http://etcd-1:2380,etcd-2=http://etcd-2:2380,etcd-3=http://etcd-3:2380
+      - ETCD_INITIAL_CLUSTER_STATE=new
+      - ETCD_INITIAL_CLUSTER_TOKEN=mpc-wallet-cluster
+      - ETCD_HEARTBEAT_INTERVAL=250
+      - ETCD_ELECTION_TIMEOUT=1250
+    volumes:
+      - etcd-2-data:/etcd-data
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 256M
+
+  etcd-3:
+    image: quay.io/coreos/etcd:v3.5.11
+    container_name: mpc-etcd-3
+    restart: unless-stopped
+    networks:
+      - mpc-internal
+    environment:
+      - ETCD_NAME=etcd-3
+      - ETCD_INITIAL_ADVERTISE_PEER_URLS=http://etcd-3:2380
+      - ETCD_LISTEN_PEER_URLS=http://0.0.0.0:2380
+      - ETCD_LISTEN_CLIENT_URLS=http://0.0.0.0:2379
+      - ETCD_ADVERTISE_CLIENT_URLS=http://etcd-3:2379
+      - ETCD_INITIAL_CLUSTER=etcd-1=http://etcd-1:2380,etcd-2=http://etcd-2:2380,etcd-3=http://etcd-3:2380
+      - ETCD_INITIAL_CLUSTER_STATE=new
+      - ETCD_INITIAL_CLUSTER_TOKEN=mpc-wallet-cluster
+      - ETCD_HEARTBEAT_INTERVAL=250
+      - ETCD_ELECTION_TIMEOUT=1250
+    volumes:
+      - etcd-3-data:/etcd-data
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 256M
+
+  # PostgreSQL for audit logs and transaction storage
+  postgres:
+    image: postgres:16-alpine
+    container_name: mpc-postgres
+    restart: unless-stopped
+    networks:
+      - mpc-internal
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-mpc}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
+      - POSTGRES_DB=${POSTGRES_DB:-mpc_wallet}
+      - PGDATA=/var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ../scripts/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+      - ./scripts/init-db.sh:/docker-entrypoint-initdb.d/02-init.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-mpc} -d ${POSTGRES_DB:-mpc_wallet}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 512M
+
+  # MPC Wallet Node 1
+  node-1:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.node
+    container_name: mpc-node-1
+    restart: unless-stopped
+    depends_on:
+      etcd-1:
+        condition: service_healthy
+      etcd-2:
+        condition: service_healthy
+      etcd-3:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    networks:
+      - mpc-internal
+      - mpc-external
+    ports:
+      - "8081:8080"  # API HTTP
+      - "9001:9000"  # QUIC P2P
+    environment:
+      - NODE_ID=1
+      - LISTEN_ADDR=0.0.0.0:8080
+      - QUIC_ADDR=0.0.0.0:9000
+      - CA_CERT_PATH=/certs/ca.crt
+      - NODE_CERT_PATH=/certs/node1.crt
+      - NODE_KEY_PATH=/certs/node1.key
+      - BOOTSTRAP_PEERS=node-2:9000,node-3:9000,node-4:9000,node-5:9000
+      - ETCD_ENDPOINTS=http://etcd-1:2379,http://etcd-2:2379,http://etcd-3:2379
+      - POSTGRES_URL=postgresql://${POSTGRES_USER:-mpc}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-mpc_wallet}
+      - THRESHOLD=${THRESHOLD:-4}
+      - TOTAL_NODES=${TOTAL_NODES:-5}
+      - BITCOIN_NETWORK=${BITCOIN_NETWORK:-testnet}
+      - ESPLORA_URL=${ESPLORA_URL:-https://blockstream.info/testnet/api}
+      - RUST_LOG=${RUST_LOG:-info}
+      - RUST_BACKTRACE=1
+    volumes:
+      - ${CERTS_PATH:?CERTS_PATH must be set}:/certs:ro
+      - node-1-data:/data
+    healthcheck:
+      test: ["CMD", "/app/healthcheck.sh"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '2'
+        reservations:
+          memory: 1G
+          cpus: '1'
+
+  # MPC Wallet Node 2
+  node-2:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.node
+    container_name: mpc-node-2
+    restart: unless-stopped
+    depends_on:
+      etcd-1:
+        condition: service_healthy
+      etcd-2:
+        condition: service_healthy
+      etcd-3:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    networks:
+      - mpc-internal
+      - mpc-external
+    ports:
+      - "8082:8080"  # API HTTP
+      - "9002:9000"  # QUIC P2P
+    environment:
+      - NODE_ID=2
+      - LISTEN_ADDR=0.0.0.0:8080
+      - QUIC_ADDR=0.0.0.0:9000
+      - CA_CERT_PATH=/certs/ca.crt
+      - NODE_CERT_PATH=/certs/node2.crt
+      - NODE_KEY_PATH=/certs/node2.key
+      - BOOTSTRAP_PEERS=node-1:9000,node-3:9000,node-4:9000,node-5:9000
+      - ETCD_ENDPOINTS=http://etcd-1:2379,http://etcd-2:2379,http://etcd-3:2379
+      - POSTGRES_URL=postgresql://${POSTGRES_USER:-mpc}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-mpc_wallet}
+      - THRESHOLD=${THRESHOLD:-4}
+      - TOTAL_NODES=${TOTAL_NODES:-5}
+      - BITCOIN_NETWORK=${BITCOIN_NETWORK:-testnet}
+      - ESPLORA_URL=${ESPLORA_URL:-https://blockstream.info/testnet/api}
+      - RUST_LOG=${RUST_LOG:-info}
+      - RUST_BACKTRACE=1
+    volumes:
+      - ${CERTS_PATH:?CERTS_PATH must be set}:/certs:ro
+      - node-2-data:/data
+    healthcheck:
+      test: ["CMD", "/app/healthcheck.sh"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '2'
+        reservations:
+          memory: 1G
+          cpus: '1'
+
+  # MPC Wallet Node 3
+  node-3:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.node
+    container_name: mpc-node-3
+    restart: unless-stopped
+    depends_on:
+      etcd-1:
+        condition: service_healthy
+      etcd-2:
+        condition: service_healthy
+      etcd-3:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    networks:
+      - mpc-internal
+      - mpc-external
+    ports:
+      - "8083:8080"  # API HTTP
+      - "9003:9000"  # QUIC P2P
+    environment:
+      - NODE_ID=3
+      - LISTEN_ADDR=0.0.0.0:8080
+      - QUIC_ADDR=0.0.0.0:9000
+      - CA_CERT_PATH=/certs/ca.crt
+      - NODE_CERT_PATH=/certs/node3.crt
+      - NODE_KEY_PATH=/certs/node3.key
+      - BOOTSTRAP_PEERS=node-1:9000,node-2:9000,node-4:9000,node-5:9000
+      - ETCD_ENDPOINTS=http://etcd-1:2379,http://etcd-2:2379,http://etcd-3:2379
+      - POSTGRES_URL=postgresql://${POSTGRES_USER:-mpc}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-mpc_wallet}
+      - THRESHOLD=${THRESHOLD:-4}
+      - TOTAL_NODES=${TOTAL_NODES:-5}
+      - BITCOIN_NETWORK=${BITCOIN_NETWORK:-testnet}
+      - ESPLORA_URL=${ESPLORA_URL:-https://blockstream.info/testnet/api}
+      - RUST_LOG=${RUST_LOG:-info}
+      - RUST_BACKTRACE=1
+    volumes:
+      - ${CERTS_PATH:?CERTS_PATH must be set}:/certs:ro
+      - node-3-data:/data
+    healthcheck:
+      test: ["CMD", "/app/healthcheck.sh"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '2'
+        reservations:
+          memory: 1G
+          cpus: '1'
+
+  # MPC Wallet Node 4
+  node-4:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.node
+    container_name: mpc-node-4
+    restart: unless-stopped
+    depends_on:
+      etcd-1:
+        condition: service_healthy
+      etcd-2:
+        condition: service_healthy
+      etcd-3:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    networks:
+      - mpc-internal
+      - mpc-external
+    ports:
+      - "8084:8080"  # API HTTP
+      - "9004:9000"  # QUIC P2P
+    environment:
+      - NODE_ID=4
+      - LISTEN_ADDR=0.0.0.0:8080
+      - QUIC_ADDR=0.0.0.0:9000
+      - CA_CERT_PATH=/certs/ca.crt
+      - NODE_CERT_PATH=/certs/node4.crt
+      - NODE_KEY_PATH=/certs/node4.key
+      - BOOTSTRAP_PEERS=node-1:9000,node-2:9000,node-3:9000,node-5:9000
+      - ETCD_ENDPOINTS=http://etcd-1:2379,http://etcd-2:2379,http://etcd-3:2379
+      - POSTGRES_URL=postgresql://${POSTGRES_USER:-mpc}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-mpc_wallet}
+      - THRESHOLD=${THRESHOLD:-4}
+      - TOTAL_NODES=${TOTAL_NODES:-5}
+      - BITCOIN_NETWORK=${BITCOIN_NETWORK:-testnet}
+      - ESPLORA_URL=${ESPLORA_URL:-https://blockstream.info/testnet/api}
+      - RUST_LOG=${RUST_LOG:-info}
+      - RUST_BACKTRACE=1
+    volumes:
+      - ${CERTS_PATH:?CERTS_PATH must be set}:/certs:ro
+      - node-4-data:/data
+    healthcheck:
+      test: ["CMD", "/app/healthcheck.sh"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '2'
+        reservations:
+          memory: 1G
+          cpus: '1'
+
+  # MPC Wallet Node 5
+  node-5:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.node
+    container_name: mpc-node-5
+    restart: unless-stopped
+    depends_on:
+      etcd-1:
+        condition: service_healthy
+      etcd-2:
+        condition: service_healthy
+      etcd-3:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    networks:
+      - mpc-internal
+      - mpc-external
+    ports:
+      - "8085:8080"  # API HTTP
+      - "9005:9000"  # QUIC P2P
+    environment:
+      - NODE_ID=5
+      - LISTEN_ADDR=0.0.0.0:8080
+      - QUIC_ADDR=0.0.0.0:9000
+      - CA_CERT_PATH=/certs/ca.crt
+      - NODE_CERT_PATH=/certs/node5.crt
+      - NODE_KEY_PATH=/certs/node5.key
+      - BOOTSTRAP_PEERS=node-1:9000,node-2:9000,node-3:9000,node-4:9000
+      - ETCD_ENDPOINTS=http://etcd-1:2379,http://etcd-2:2379,http://etcd-3:2379
+      - POSTGRES_URL=postgresql://${POSTGRES_USER:-mpc}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-mpc_wallet}
+      - THRESHOLD=${THRESHOLD:-4}
+      - TOTAL_NODES=${TOTAL_NODES:-5}
+      - BITCOIN_NETWORK=${BITCOIN_NETWORK:-testnet}
+      - ESPLORA_URL=${ESPLORA_URL:-https://blockstream.info/testnet/api}
+      - RUST_LOG=${RUST_LOG:-info}
+      - RUST_BACKTRACE=1
+    volumes:
+      - ${CERTS_PATH:?CERTS_PATH must be set}:/certs:ro
+      - node-5-data:/data
+    healthcheck:
+      test: ["CMD", "/app/healthcheck.sh"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '2'
+        reservations:
+          memory: 1G
+          cpus: '1'
+
+networks:
+  # Internal network for infrastructure communication
+  mpc-internal:
+    driver: bridge
+    internal: true
+  # External network for API access
+  mpc-external:
+    driver: bridge
+
+volumes:
+  etcd-1-data:
+    driver: local
+  etcd-2-data:
+    driver: local
+  etcd-3-data:
+    driver: local
+  postgres-data:
+    driver: local
+  node-1-data:
+    driver: local
+  node-2-data:
+    driver: local
+  node-3-data:
+    driver: local
+  node-4-data:
+    driver: local
+  node-5-data:
+    driver: local

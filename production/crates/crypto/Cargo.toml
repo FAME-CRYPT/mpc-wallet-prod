@@ -1,0 +1,13 @@
+[package]
+name = "threshold-crypto"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+threshold-types = { path = "../types" }
+
+# Cryptography
+ed25519-dalek = "2.1"
+
+# Error handling
+thiserror = { workspace = true }

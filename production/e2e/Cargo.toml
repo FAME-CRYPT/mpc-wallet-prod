@@ -1,0 +1,78 @@
+[package]
+name = "e2e-tests"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# Async runtime
+tokio = { workspace = true, features = ["full"] }
+tokio-postgres = { workspace = true }
+
+# HTTP client
+reqwest = { workspace = true, features = ["json"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Testing
+anyhow = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter", "json"] }
+
+# etcd client
+etcd-client = { workspace = true }
+
+# Internal dependencies
+threshold-types = { workspace = true }
+
+# Test utilities
+testcontainers = { workspace = true }
+
+# Async utilities
+futures = { workspace = true }
+
+# Random utilities
+rand = { workspace = true }
+
+[[test]]
+name = "cluster_setup"
+path = "cluster_setup.rs"
+harness = true
+
+[[test]]
+name = "transaction_lifecycle"
+path = "transaction_lifecycle.rs"
+harness = true
+
+[[test]]
+name = "byzantine_scenarios"
+path = "byzantine_scenarios.rs"
+harness = true
+
+[[test]]
+name = "fault_tolerance"
+path = "fault_tolerance.rs"
+harness = true
+
+[[test]]
+name = "concurrency"
+path = "concurrency.rs"
+harness = true
+
+[[test]]
+name = "network_partition"
+path = "network_partition.rs"
+harness = true
+
+[[test]]
+name = "certificate_rotation"
+path = "certificate_rotation.rs"
+harness = true
+
+[[test]]
+name = "benchmarks"
+path = "benchmarks.rs"
+harness = true

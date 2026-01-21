@@ -53,7 +53,30 @@
       "Bash(git add:*)",
       "Bash(git commit:*)",
       "Bash(git push:*)",
-      "Bash(git reset:*)"
+      "Bash(git reset:*)",
+      "Bash(xargs -I {} sh -c \"test -f ''c:\\\\Users\\\\user\\\\Desktop\\\\MPC-WALLET\\\\production\\\\crates\\\\{}\\\\Cargo.toml'' && echo ''{}: exists'' || echo ''{}: missing''\")",
+      "Bash(cargo tree:*)",
+      "Bash(ls:*)",
+      "Bash(powershell.exe -Command \"Get-ChildItem crates | Select-Object Name\")",
+      "Bash(cargo test:*)",
+      "Bash(./target/release/threshold-wallet.exe:*)",
+      "Bash(tree:*)",
+      "Bash(./scripts/generate-certs.sh:*)",
+      "Bash(./scripts/verify-certs.sh:*)",
+      "Bash(openssl x509:*)",
+      "Bash(./scripts/renew-certs.sh:*)",
+      "Bash(docker network prune:*)",
+      "Bash(docker volume prune:*)",
+      "Bash(docker system prune:*)",
+      "Bash(./generate-certs.sh:*)",
+      "Bash(docker build:*)",
+      "Bash(docker inspect:*)",
+      "Bash(for i in 1 2 3 4 5)",
+      "Bash(docker-compose:*)",
+      "Bash(docker builder prune:*)",
+      "Bash(curl:*)",
+      "Bash(docker port:*)",
+      "Bash(docker images:*)"
     ]
   }
 }

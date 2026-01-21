@@ -1,0 +1,342 @@
+groups:
+  - name: mpc_node_alerts
+    interval: 30s
+    rules:
+      # Node availability alerts
+      - alert: MPCNodeDown
+        expr: up{job="mpc-nodes"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          component: mpc-node
+        annotations:
+          summary: "MPC node {{ $labels.instance }} is down"
+          description: "MPC node {{ $labels.instance }} (node_id: {{ $labels.node_id }}) has been down for more than 1 minute. This may affect consensus."
+
+      - alert: MPCClusterDegraded
+        expr: count(up{job="mpc-nodes"} == 1) < 4
+        for: 2m
+        labels:
+          severity: critical
+          component: mpc-cluster
+        annotations:
+          summary: "MPC cluster is degraded - less than threshold nodes available"
+          description: "Only {{ $value }} out of 5 MPC nodes are available. Consensus threshold is 4. The cluster cannot process transactions."
+
+      - alert: MPCNodeHighMemoryUsage
+        expr: container_memory_usage_bytes{name=~"mpc-node-.*"} / container_spec_memory_limit_bytes{name=~"mpc-node-.*"} > 0.85
+        for: 5m
+        labels:
+          severity: warning
+          component: mpc-node
+        annotations:
+          summary: "High memory usage on {{ $labels.name }}"
+          description: "Memory usage on {{ $labels.name }} is above 85% (current: {{ $value | humanizePercentage }})"
+
+      - alert: MPCNodeHighCPUUsage
+        expr: rate(container_cpu_usage_seconds_total{name=~"mpc-node-.*"}[5m]) > 1.8
+        for: 10m
+        labels:
+          severity: warning
+          component: mpc-node
+        annotations:
+          summary: "High CPU usage on {{ $labels.name }}"
+          description: "CPU usage on {{ $labels.name }} is above 90% for 10 minutes (current: {{ $value }})"
+
+  - name: byzantine_consensus_alerts
+    interval: 15s
+    rules:
+      # Byzantine violation detection
+      - alert: ByzantineViolationDetected
+        expr: increase(mpc_byzantine_violations_total[5m]) > 0
+        labels:
+          severity: critical
+          component: byzantine-consensus
+        annotations:
+          summary: "Byzantine violation detected on node {{ $labels.node_id }}"
+          description: "Byzantine violation of type '{{ $labels.type }}' detected on node {{ $labels.node_id }}. Immediate investigation required."
+
+      - alert: ByzantineDoubleVoteDetected
+        expr: increase(mpc_byzantine_violations_total{type="double_vote"}[5m]) > 0
+        labels:
+          severity: critical
+          component: byzantine-consensus
+        annotations:
+          summary: "Double vote detected on node {{ $labels.node_id }}"
+          description: "Node {{ $labels.node_id }} attempted to vote twice on the same transaction. This is a severe Byzantine fault."
+
+      - alert: ConsensusThresholdNotReached
+        expr: mpc_votes_total < mpc_consensus_threshold
+        for: 5m
+        labels:
+          severity: warning
+          component: consensus
+        annotations:
+          summary: "Consensus threshold not reached for transaction {{ $labels.transaction_id }}"
+          description: "Transaction {{ $labels.transaction_id }} has only {{ $value }} votes, but requires {{ $labels.threshold }} votes."
+
+      - alert: ConsensusRoundTooSlow
+        expr: histogram_quantile(0.95, rate(mpc_consensus_round_duration_seconds_bucket[5m])) > 30
+        for: 5m
+        labels:
+          severity: warning
+          component: consensus
+        annotations:
+          summary: "Consensus rounds are taking too long"
+          description: "95th percentile of consensus round duration is {{ $value }}s, which exceeds the 30s threshold."
+
+      - alert: HighVoteRejectionRate
+        expr: rate(mpc_votes_total{result="reject"}[10m]) / rate(mpc_votes_total[10m]) > 0.3
+        for: 5m
+        labels:
+          severity: warning
+          component: consensus
+        annotations:
+          summary: "High vote rejection rate detected"
+          description: "More than 30% of votes are rejections. Current rate: {{ $value | humanizePercentage }}"
+
+  - name: transaction_alerts
+    interval: 30s
+    rules:
+      # Transaction processing alerts
+      - alert: HighTransactionFailureRate
+        expr: rate(mpc_transactions_total{state="failed"}[5m]) > 0.1
+        for: 3m
+        labels:
+          severity: warning
+          component: transactions
+        annotations:
+          summary: "High transaction failure rate"
+          description: "Transaction failure rate is {{ $value }}/s over the last 5 minutes."
+
+      - alert: TransactionQueueBacklog
+        expr: mpc_transaction_queue_size > 100
+        for: 10m
+        labels:
+          severity: warning
+          component: transactions
+        annotations:
+          summary: "Large transaction queue backlog"
+          description: "Transaction queue has {{ $value }} pending transactions for more than 10 minutes."
+
+      - alert: NoTransactionsProcessed
+        expr: rate(mpc_transactions_total[10m]) == 0
+        for: 15m
+        labels:
+          severity: info
+          component: transactions
+        annotations:
+          summary: "No transactions processed in last 15 minutes"
+          description: "The MPC cluster has not processed any transactions in the last 15 minutes. This may be normal during low activity periods."
+
+  - name: signature_performance_alerts
+    interval: 30s
+    rules:
+      # Signature and DKG performance
+      - alert: SlowSignatureGeneration
+        expr: histogram_quantile(0.95, rate(mpc_signature_duration_seconds_bucket[5m])) > 10
+        for: 5m
+        labels:
+          severity: warning
+          component: signatures
+        annotations:
+          summary: "Signature generation is slow"
+          description: "95th percentile signature duration is {{ $value }}s (protocol: {{ $labels.protocol }}). Expected < 10s."
+
+      - alert: HighSignatureFailureRate
+        expr: rate(mpc_signatures_total{result="failure"}[10m]) / rate(mpc_signatures_total[10m]) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+          component: signatures
+        annotations:
+          summary: "High signature failure rate for {{ $labels.protocol }}"
+          description: "Signature failure rate is {{ $value | humanizePercentage }} for protocol {{ $labels.protocol }}"
+
+      - alert: PresignaturePoolLow
+        expr: mpc_presignature_pool_size < 10
+        for: 5m
+        labels:
+          severity: warning
+          component: presignatures
+        annotations:
+          summary: "Presignature pool is low on node {{ $labels.node_id }}"
+          description: "Presignature pool has only {{ $value }} presignatures available. Consider generating more to maintain performance."
+
+      - alert: PresignaturePoolDepleted
+        expr: mpc_presignature_pool_size == 0
+        for: 2m
+        labels:
+          severity: critical
+          component: presignatures
+        annotations:
+          summary: "Presignature pool depleted on node {{ $labels.node_id }}"
+          description: "No presignatures available. Signature generation will be significantly slower."
+
+      - alert: DKGCeremonyTooSlow
+        expr: histogram_quantile(0.95, rate(mpc_dkg_duration_seconds_bucket[30m])) > 60
+        labels:
+          severity: warning
+          component: dkg
+        annotations:
+          summary: "DKG ceremony is taking too long"
+          description: "95th percentile DKG duration is {{ $value }}s (protocol: {{ $labels.protocol }}). Expected < 60s."
+
+  - name: infrastructure_alerts
+    interval: 30s
+    rules:
+      # etcd cluster health
+      - alert: EtcdClusterDegraded
+        expr: up{job="etcd"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          component: etcd
+        annotations:
+          summary: "etcd node {{ $labels.instance }} is down"
+          description: "etcd node {{ $labels.instance }} has been down for 2 minutes. This affects cluster coordination."
+
+      - alert: EtcdNoLeader
+        expr: etcd_server_has_leader{job="etcd"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          component: etcd
+        annotations:
+          summary: "etcd cluster has no leader"
+          description: "etcd cluster on {{ $labels.instance }} has no elected leader. This will block all write operations."
+
+      - alert: EtcdHighNumberOfFailedProposals
+        expr: increase(etcd_server_proposals_failed_total[1h]) > 5
+        labels:
+          severity: warning
+          component: etcd
+        annotations:
+          summary: "High number of failed etcd proposals"
+          description: "etcd instance {{ $labels.instance }} has seen {{ $value }} failed proposals in the last hour."
+
+      - alert: EtcdHighFsyncDurations
+        expr: histogram_quantile(0.99, rate(etcd_disk_wal_fsync_duration_seconds_bucket[5m])) > 0.5
+        for: 10m
+        labels:
+          severity: warning
+          component: etcd
+        annotations:
+          summary: "High etcd fsync durations"
+          description: "etcd instance {{ $labels.instance }} has 99th percentile fsync durations of {{ $value }}s. Storage may be slow."
+
+      - alert: EtcdMemberCommunicationSlow
+        expr: histogram_quantile(0.99, rate(etcd_network_peer_round_trip_time_seconds_bucket[5m])) > 0.15
+        for: 10m
+        labels:
+          severity: warning
+          component: etcd
+        annotations:
+          summary: "etcd member communication is slow"
+          description: "etcd instance {{ $labels.instance }} has 99th percentile round trip time of {{ $value }}s to peers."
+
+      # PostgreSQL alerts
+      - alert: PostgresDown
+        expr: up{job="postgres"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          component: postgres
+        annotations:
+          summary: "PostgreSQL is down"
+          description: "PostgreSQL database has been unreachable for 1 minute. Transaction history and audit logs are unavailable."
+
+      - alert: PostgresTooManyConnections
+        expr: sum(pg_stat_activity_count) > 80
+        for: 5m
+        labels:
+          severity: warning
+          component: postgres
+        annotations:
+          summary: "PostgreSQL has too many connections"
+          description: "PostgreSQL has {{ $value }} active connections. Max is typically 100."
+
+      - alert: PostgresHighQueryDuration
+        expr: rate(pg_stat_statements_mean_time_seconds[5m]) > 1
+        for: 10m
+        labels:
+          severity: warning
+          component: postgres
+        annotations:
+          summary: "PostgreSQL queries are slow"
+          description: "Mean query duration is {{ $value }}s, which is above normal."
+
+      - alert: PostgresDeadlocks
+        expr: increase(pg_stat_database_deadlocks[1h]) > 0
+        labels:
+          severity: warning
+          component: postgres
+        annotations:
+          summary: "PostgreSQL deadlocks detected"
+          description: "Database has encountered {{ $value }} deadlocks in the last hour."
+
+  - name: network_alerts
+    interval: 30s
+    rules:
+      # Network connectivity
+      - alert: LowPeerConnectivity
+        expr: mpc_connected_peers < 3
+        for: 5m
+        labels:
+          severity: warning
+          component: network
+        annotations:
+          summary: "Low peer connectivity on node {{ $labels.node_id }}"
+          description: "Node {{ $labels.node_id }} has only {{ $value }} connected peers. Expected at least 3 for healthy operation."
+
+      - alert: NoPeerConnectivity
+        expr: mpc_connected_peers == 0
+        for: 2m
+        labels:
+          severity: critical
+          component: network
+        annotations:
+          summary: "No peer connectivity on node {{ $labels.node_id }}"
+          description: "Node {{ $labels.node_id }} has no connected peers. It cannot participate in consensus."
+
+      - alert: HighNetworkErrorRate
+        expr: rate(mpc_network_errors_total[5m]) > 1
+        for: 5m
+        labels:
+          severity: warning
+          component: network
+        annotations:
+          summary: "High network error rate on node {{ $labels.node_id }}"
+          description: "Node {{ $labels.node_id }} is experiencing {{ $value }} network errors per second."
+
+  - name: security_alerts
+    interval: 1h
+    rules:
+      # Certificate expiry warnings
+      - alert: CertificateExpiringSoon
+        expr: (x509_cert_expiry_timestamp_seconds - time()) / 86400 < 30
+        labels:
+          severity: warning
+          component: security
+        annotations:
+          summary: "Certificate for {{ $labels.node_id }} expiring soon"
+          description: "Certificate for node {{ $labels.node_id }} will expire in {{ $value }} days. Renew before expiry."
+
+      - alert: CertificateExpiryImminent
+        expr: (x509_cert_expiry_timestamp_seconds - time()) / 86400 < 7
+        labels:
+          severity: critical
+          component: security
+        annotations:
+          summary: "Certificate for {{ $labels.node_id }} expiring imminently"
+          description: "Certificate for node {{ $labels.node_id }} will expire in {{ $value }} days. URGENT: Renew immediately."
+
+      - alert: TLSHandshakeFailures
+        expr: rate(mpc_tls_handshake_failures_total[10m]) > 0.5
+        for: 5m
+        labels:
+          severity: warning
+          component: security
+        annotations:
+          summary: "TLS handshake failures on node {{ $labels.node_id }}"
+          description: "Node {{ $labels.node_id }} is experiencing {{ $value }} TLS handshake failures per second."

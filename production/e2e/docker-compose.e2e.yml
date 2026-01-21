@@ -1,0 +1,311 @@
+version: '3.8'
+
+services:
+  # etcd cluster for distributed coordination
+  etcd-1:
+    image: quay.io/coreos/etcd:v3.5.11
+    container_name: e2e-etcd-1
+    networks:
+      - e2e-internal
+    environment:
+      - ETCD_NAME=etcd-1
+      - ETCD_INITIAL_ADVERTISE_PEER_URLS=http://etcd-1:2380
+      - ETCD_LISTEN_PEER_URLS=http://0.0.0.0:2380
+      - ETCD_LISTEN_CLIENT_URLS=http://0.0.0.0:2379
+      - ETCD_ADVERTISE_CLIENT_URLS=http://etcd-1:2379
+      - ETCD_INITIAL_CLUSTER=etcd-1=http://etcd-1:2380,etcd-2=http://etcd-2:2380,etcd-3=http://etcd-3:2380
+      - ETCD_INITIAL_CLUSTER_STATE=new
+      - ETCD_INITIAL_CLUSTER_TOKEN=e2e-cluster
+    ports:
+      - "2379:2379"
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  etcd-2:
+    image: quay.io/coreos/etcd:v3.5.11
+    container_name: e2e-etcd-2
+    networks:
+      - e2e-internal
+    environment:
+      - ETCD_NAME=etcd-2
+      - ETCD_INITIAL_ADVERTISE_PEER_URLS=http://etcd-2:2380
+      - ETCD_LISTEN_PEER_URLS=http://0.0.0.0:2380
+      - ETCD_LISTEN_CLIENT_URLS=http://0.0.0.0:2379
+      - ETCD_ADVERTISE_CLIENT_URLS=http://etcd-2:2379
+      - ETCD_INITIAL_CLUSTER=etcd-1=http://etcd-1:2380,etcd-2=http://etcd-2:2380,etcd-3=http://etcd-3:2380
+      - ETCD_INITIAL_CLUSTER_STATE=new
+      - ETCD_INITIAL_CLUSTER_TOKEN=e2e-cluster
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  etcd-3:
+    image: quay.io/coreos/etcd:v3.5.11
+    container_name: e2e-etcd-3
+    networks:
+      - e2e-internal
+    environment:
+      - ETCD_NAME=etcd-3
+      - ETCD_INITIAL_ADVERTISE_PEER_URLS=http://etcd-3:2380
+      - ETCD_LISTEN_PEER_URLS=http://0.0.0.0:2380
+      - ETCD_LISTEN_CLIENT_URLS=http://0.0.0.0:2379
+      - ETCD_ADVERTISE_CLIENT_URLS=http://etcd-3:2379
+      - ETCD_INITIAL_CLUSTER=etcd-1=http://etcd-1:2380,etcd-2=http://etcd-2:2380,etcd-3=http://etcd-3:2380
+      - ETCD_INITIAL_CLUSTER_STATE=new
+      - ETCD_INITIAL_CLUSTER_TOKEN=e2e-cluster
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # PostgreSQL for audit logs and transaction storage
+  postgres:
+    image: postgres:16-alpine
+    container_name: e2e-postgres
+    networks:
+      - e2e-internal
+    environment:
+      - POSTGRES_USER=mpc
+      - POSTGRES_PASSWORD=mpcpassword
+      - POSTGRES_DB=mpc_wallet
+      - PGDATA=/var/lib/postgresql/data/pgdata
+    ports:
+      - "5432:5432"
+    volumes:
+      - ../scripts/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mpc -d mpc_wallet"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # MPC Wallet Node 1
+  node-1:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.node
+    container_name: e2e-node-1
+    depends_on:
+      etcd-1:
+        condition: service_healthy
+      etcd-2:
+        condition: service_healthy
+      etcd-3:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    networks:
+      - e2e-internal
+    ports:
+      - "8081:8080"
+      - "9001:9000"
+    environment:
+      - NODE_ID=1
+      - LISTEN_ADDR=0.0.0.0:8080
+      - QUIC_ADDR=0.0.0.0:9000
+      - CA_CERT_PATH=/certs/ca.crt
+      - NODE_CERT_PATH=/certs/node1.crt
+      - NODE_KEY_PATH=/certs/node1.key
+      - BOOTSTRAP_PEERS=node-2:9000,node-3:9000,node-4:9000,node-5:9000
+      - ETCD_ENDPOINTS=http://etcd-1:2379,http://etcd-2:2379,http://etcd-3:2379
+      - POSTGRES_URL=postgresql://mpc:mpcpassword@postgres:5432/mpc_wallet
+      - THRESHOLD=4
+      - TOTAL_NODES=5
+      - BITCOIN_NETWORK=testnet
+      - ESPLORA_URL=https://blockstream.info/testnet/api
+      - RUST_LOG=info
+    volumes:
+      - ${E2E_CERTS_PATH:-../certs}:/certs:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # MPC Wallet Node 2
+  node-2:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.node
+    container_name: e2e-node-2
+    depends_on:
+      etcd-1:
+        condition: service_healthy
+      etcd-2:
+        condition: service_healthy
+      etcd-3:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    networks:
+      - e2e-internal
+    ports:
+      - "8082:8080"
+      - "9002:9000"
+    environment:
+      - NODE_ID=2
+      - LISTEN_ADDR=0.0.0.0:8080
+      - QUIC_ADDR=0.0.0.0:9000
+      - CA_CERT_PATH=/certs/ca.crt
+      - NODE_CERT_PATH=/certs/node2.crt
+      - NODE_KEY_PATH=/certs/node2.key
+      - BOOTSTRAP_PEERS=node-1:9000,node-3:9000,node-4:9000,node-5:9000
+      - ETCD_ENDPOINTS=http://etcd-1:2379,http://etcd-2:2379,http://etcd-3:2379
+      - POSTGRES_URL=postgresql://mpc:mpcpassword@postgres:5432/mpc_wallet
+      - THRESHOLD=4
+      - TOTAL_NODES=5
+      - BITCOIN_NETWORK=testnet
+      - ESPLORA_URL=https://blockstream.info/testnet/api
+      - RUST_LOG=info
+    volumes:
+      - ${E2E_CERTS_PATH:-../certs}:/certs:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # MPC Wallet Node 3
+  node-3:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.node
+    container_name: e2e-node-3
+    depends_on:
+      etcd-1:
+        condition: service_healthy
+      etcd-2:
+        condition: service_healthy
+      etcd-3:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    networks:
+      - e2e-internal
+    ports:
+      - "8083:8080"
+      - "9003:9000"
+    environment:
+      - NODE_ID=3
+      - LISTEN_ADDR=0.0.0.0:8080
+      - QUIC_ADDR=0.0.0.0:9000
+      - CA_CERT_PATH=/certs/ca.crt
+      - NODE_CERT_PATH=/certs/node3.crt
+      - NODE_KEY_PATH=/certs/node3.key
+      - BOOTSTRAP_PEERS=node-1:9000,node-2:9000,node-4:9000,node-5:9000
+      - ETCD_ENDPOINTS=http://etcd-1:2379,http://etcd-2:2379,http://etcd-3:2379
+      - POSTGRES_URL=postgresql://mpc:mpcpassword@postgres:5432/mpc_wallet
+      - THRESHOLD=4
+      - TOTAL_NODES=5
+      - BITCOIN_NETWORK=testnet
+      - ESPLORA_URL=https://blockstream.info/testnet/api
+      - RUST_LOG=info
+    volumes:
+      - ${E2E_CERTS_PATH:-../certs}:/certs:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # MPC Wallet Node 4
+  node-4:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.node
+    container_name: e2e-node-4
+    depends_on:
+      etcd-1:
+        condition: service_healthy
+      etcd-2:
+        condition: service_healthy
+      etcd-3:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    networks:
+      - e2e-internal
+    ports:
+      - "8084:8080"
+      - "9004:9000"
+    environment:
+      - NODE_ID=4
+      - LISTEN_ADDR=0.0.0.0:8080
+      - QUIC_ADDR=0.0.0.0:9000
+      - CA_CERT_PATH=/certs/ca.crt
+      - NODE_CERT_PATH=/certs/node4.crt
+      - NODE_KEY_PATH=/certs/node4.key
+      - BOOTSTRAP_PEERS=node-1:9000,node-2:9000,node-3:9000,node-5:9000
+      - ETCD_ENDPOINTS=http://etcd-1:2379,http://etcd-2:2379,http://etcd-3:2379
+      - POSTGRES_URL=postgresql://mpc:mpcpassword@postgres:5432/mpc_wallet
+      - THRESHOLD=4
+      - TOTAL_NODES=5
+      - BITCOIN_NETWORK=testnet
+      - ESPLORA_URL=https://blockstream.info/testnet/api
+      - RUST_LOG=info
+    volumes:
+      - ${E2E_CERTS_PATH:-../certs}:/certs:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # MPC Wallet Node 5
+  node-5:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.node
+    container_name: e2e-node-5
+    depends_on:
+      etcd-1:
+        condition: service_healthy
+      etcd-2:
+        condition: service_healthy
+      etcd-3:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    networks:
+      - e2e-internal
+    ports:
+      - "8085:8080"
+      - "9005:9000"
+    environment:
+      - NODE_ID=5
+      - LISTEN_ADDR=0.0.0.0:8080
+      - QUIC_ADDR=0.0.0.0:9000
+      - CA_CERT_PATH=/certs/ca.crt
+      - NODE_CERT_PATH=/certs/node5.crt
+      - NODE_KEY_PATH=/certs/node5.key
+      - BOOTSTRAP_PEERS=node-1:9000,node-2:9000,node-3:9000,node-4:9000
+      - ETCD_ENDPOINTS=http://etcd-1:2379,http://etcd-2:2379,http://etcd-3:2379
+      - POSTGRES_URL=postgresql://mpc:mpcpassword@postgres:5432/mpc_wallet
+      - THRESHOLD=4
+      - TOTAL_NODES=5
+      - BITCOIN_NETWORK=testnet
+      - ESPLORA_URL=https://blockstream.info/testnet/api
+      - RUST_LOG=info
+    volumes:
+      - ${E2E_CERTS_PATH:-../certs}:/certs:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+networks:
+  e2e-internal:
+    driver: bridge
+    name: e2e-mpc-internal

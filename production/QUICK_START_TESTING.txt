@@ -1,0 +1,176 @@
+════════════════════════════════════════════════════════════════════════════
+    MPC WALLET - QUICK START TESTING GUIDE
+════════════════════════════════════════════════════════════════════════════
+
+📋 QUICK REFERENCE: Complete System Test in 5 Minutes
+
+════════════════════════════════════════════════════════════════════════════
+STEP 1: ONE-TIME SETUP (5 minutes)
+════════════════════════════════════════════════════════════════════════════
+
+# Navigate to production directory
+cd /mnt/c/Users/user/Desktop/MPC-WALLET/production
+
+# Generate TLS certificates
+cd scripts
+bash generate-certs.sh
+cd ..
+
+# Create environment file
+cd docker
+cp .env.example .env
+
+# ⚠️  CRITICAL: Edit .env and change POSTGRES_PASSWORD
+nano .env
+# Set: POSTGRES_PASSWORD=YourStrongPasswordHere123!@#
+
+cd ..
+
+# Build Rust workspace
+cargo build --release
+
+════════════════════════════════════════════════════════════════════════════
+STEP 2: RUN AUTOMATED TESTS (15-20 minutes)
+════════════════════════════════════════════════════════════════════════════
+
+# Run complete end-to-end test suite
+cargo test --manifest-path e2e/Cargo.toml -- --ignored --test-threads=1 --nocapture 2>&1 | tee test_results.log
+
+# This will:
+#   ✅ Start all Docker containers (etcd, PostgreSQL, 5 nodes)
+#   ✅ Run 30+ comprehensive tests
+#   ✅ Test Byzantine fault tolerance
+#   ✅ Test failure recovery
+#   ✅ Clean up automatically
+
+════════════════════════════════════════════════════════════════════════════
+STEP 3: VERIFY RESULTS
+════════════════════════════════════════════════════════════════════════════
+
+# Check test summary
+tail -50 test_results.log
+
+# Look for:
+#   ✅ "test result: ok. X passed; 0 failed"
+#   ✅ Pass rate > 95%
+#   ❌ Any "FAILED" messages
+
+════════════════════════════════════════════════════════════════════════════
+ALTERNATIVE: MANUAL TESTING (10 minutes)
+════════════════════════════════════════════════════════════════════════════
+
+# Start system manually
+cd /mnt/c/Users/user/Desktop/MPC-WALLET/production/docker
+docker-compose up -d
+
+# Wait for health (60-90 seconds)
+sleep 90
+
+# Check all nodes healthy
+for i in {1..5}; do
+  echo "Node $i:"
+  curl http://localhost:808$i/health
+  echo
+done
+
+# Submit test transaction
+curl -X POST http://localhost:8081/api/v1/transactions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "recipient": "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx",
+    "amount_sats": 50000,
+    "metadata": "Test transaction"
+  }'
+
+# Stop system
+docker-compose down
+
+════════════════════════════════════════════════════════════════════════════
+EXPECTED RESULTS
+════════════════════════════════════════════════════════════════════════════
+
+✅ PASS: All services start healthy
+✅ PASS: etcd cluster forms 3-node quorum
+✅ PASS: PostgreSQL has 7 tables
+✅ PASS: All nodes establish QUIC connections
+✅ PASS: Transactions reach consensus (4-of-5 votes)
+✅ PASS: Byzantine violations detected
+✅ PASS: Cluster recovers after node failure
+✅ PASS: No state corruption or race conditions
+
+════════════════════════════════════════════════════════════════════════════
+TROUBLESHOOTING
+════════════════════════════════════════════════════════════════════════════
+
+Problem: Tests hang or timeout
+Fix: Check Docker resources (16GB RAM minimum)
+     docker system prune -a
+     Restart Docker daemon
+
+Problem: Certificate errors
+Fix: cd /mnt/c/Users/user/Desktop/MPC-WALLET/production/scripts
+     rm -rf ../certs/*
+     bash generate-certs.sh
+
+Problem: Port conflicts
+Fix: netstat -tuln | grep -E "8081|5432|2379"
+     Kill conflicting processes or change ports
+
+Problem: PostgreSQL connection failed
+Fix: Check .env has correct POSTGRES_PASSWORD
+     docker-compose restart postgres
+
+════════════════════════════════════════════════════════════════════════════
+AFTER SUCCESSFUL TESTS
+════════════════════════════════════════════════════════════════════════════
+
+System is READY FOR UI DEVELOPMENT ✅
+
+You can now:
+  1. Build frontend UI against REST API
+  2. Use API endpoints at http://localhost:8081/api/v1/*
+  3. Monitor cluster at http://localhost:8081/api/v1/cluster/status
+  4. Submit transactions via POST /api/v1/transactions
+
+════════════════════════════════════════════════════════════════════════════
+DOCUMENTATION
+════════════════════════════════════════════════════════════════════════════
+
+📖 Full Test Report: TEST_EXECUTION_REPORT.md (comprehensive guide)
+📖 Quick Run Guide: RUN_TESTS.md (detailed commands)
+📖 System Assessment: SYSTEM_READINESS_SUMMARY.md (architecture review)
+📖 Docker Guide: docker/README.md (deployment guide)
+📖 Quick Start: docker/QUICKSTART.md (5-minute setup)
+
+════════════════════════════════════════════════════════════════════════════
+QUICK COMMANDS REFERENCE
+════════════════════════════════════════════════════════════════════════════
+
+# Start system
+cd /mnt/c/Users/user/Desktop/MPC-WALLET/production/docker && docker-compose up -d
+
+# Stop system
+docker-compose down
+
+# View logs
+docker-compose logs -f
+
+# Run all tests
+cd /mnt/c/Users/user/Desktop/MPC-WALLET/production && cargo test --manifest-path e2e/Cargo.toml -- --ignored --test-threads=1
+
+# Check health
+for i in {1..5}; do curl http://localhost:808$i/health; done
+
+# Clean everything
+docker-compose down -v && cargo clean
+
+════════════════════════════════════════════════════════════════════════════
+CONTACT & SUPPORT
+════════════════════════════════════════════════════════════════════════════
+
+For issues or questions:
+  1. Check troubleshooting section in RUN_TESTS.md
+  2. Review logs: docker-compose logs
+  3. Check test output: test_results.log
+
+════════════════════════════════════════════════════════════════════════════

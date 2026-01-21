@@ -1,0 +1,328 @@
+Byzantine Consensus Flow - Transaction Approval Process
+========================================================
+
+OVERVIEW: 4-of-5 Threshold Voting with Byzantine Fault Detection
+
+
+PHASE 1: TRANSACTION SUBMISSION
+================================
+
+Client                 Node 1 (Receives Request)                PostgreSQL
+  │                            │                                     │
+  │ POST /api/v1/transactions  │                                     │
+  ├───────────────────────────►│                                     │
+  │                            │                                     │
+  │                            │  INSERT INTO transactions           │
+  │                            │  (state='pending')                  │
+  │                            ├────────────────────────────────────►│
+  │                            │                                     │
+  │                            │◄────────────────────────────────────┤
+  │  {txid, state: pending}    │         tx_id returned              │
+  │◄───────────────────────────┤                                     │
+  │                            │                                     │
+  │                            │  Broadcast to all nodes             │
+  │                            │  via QUIC mesh                      │
+  │                            ├─────────────────┐                   │
+  │                            │                 │                   │
+  │                            ▼                 ▼                   │
+
+
+PHASE 2: VOTE COLLECTION (Each Node Independently Votes)
+=========================================================
+
+Node 1                    Node 2                    Node 3                    Node 4                    Node 5
+  │                         │                         │                         │                         │
+  │ Validate TX             │ Validate TX             │ Validate TX             │ Validate TX             │ Validate TX
+  │ - Check balance         │ - Check balance         │ - Check balance         │ - Check balance         │ - Check balance
+  │ - Verify address        │ - Verify address        │ - Verify address        │ - Verify address        │ - Verify address
+  │ - Apply policy          │ - Apply policy          │ - Apply policy          │ - Apply policy          │ - Apply policy
+  │                         │                         │                         │                         │
+  │ Generate Vote           │ Generate Vote           │ Generate Vote           │ Generate Vote           │ Generate Vote
+  │ vote_value = APPROVE    │ vote_value = APPROVE    │ vote_value = APPROVE    │ vote_value = APPROVE    │ vote_value = REJECT
+  │ Sign with node key      │ Sign with node key      │ Sign with node key      │ Sign with node key      │ Sign with node key (MALICIOUS)
+  │                         │                         │                         │                         │
+  │                         │                         │                         │                         │
+  │                    Broadcast votes to all nodes via QUIC mesh                                         │
+  ├────────────────────────►├────────────────────────►├────────────────────────►├────────────────────────►│
+  │◄────────────────────────┤◄────────────────────────┤◄────────────────────────┤◄────────────────────────┤
+
+
+PHASE 3: BYZANTINE DETECTION & VOTE PROCESSING
+===============================================
+
+Each Node Processes Received Votes:
+
+Node 1 Byzantine Detector         etcd                    PostgreSQL
+         │                          │                          │
+         │  Receive vote from N2    │                          │
+         ├─────────────┐            │                          │
+         │             │            │                          │
+         │  1. Verify signature     │                          │
+         │     (Ed25519)            │                          │
+         │             │            │                          │
+         │  2. Check for double vote│                          │
+         │     STORE_VOTE(tx, node) │                          │
+         │             ├───────────►│                          │
+         │             │            │  Check if vote exists    │
+         │             │◄───────────┤  for (tx_id, node_id)    │
+         │             │            │                          │
+         │  3. Increment vote count │                          │
+         │     INCREMENT_COUNT()    │                          │
+         │             ├───────────►│                          │
+         │             │            │  tx:votes:approve += 1   │
+         │             │◄───────────┤  returns new count       │
+         │             │            │                          │
+         │  4. Check threshold      │                          │
+         │     GET_THRESHOLD()      │                          │
+         │             ├───────────►│                          │
+         │             │◄───────────┤  threshold = 4           │
+         │             │            │                          │
+         │  5. Record valid vote    │                          │
+         │     RECORD_VOTE()        │                          │
+         │             ├───────────────────────────────────────►│
+         │             │            │    INSERT INTO votes     │
+         │             │◄───────────────────────────────────────┤
+         │             │            │                          │
+         │◄────────────┘            │                          │
+         │  Result: Accepted        │                          │
+
+
+BYZANTINE VIOLATION SCENARIOS
+==============================
+
+Scenario 1: DOUBLE VOTE DETECTION
+----------------------------------
+
+Node 5 (Malicious)        Node 1 Detector           etcd                    PostgreSQL
+      │                        │                       │                          │
+      │  Vote 1: APPROVE       │                       │                          │
+      ├───────────────────────►│                       │                          │
+      │                        │  STORE_VOTE()         │                          │
+      │                        ├──────────────────────►│                          │
+      │                        │                       │  Store: N5→APPROVE       │
+      │                        │◄──────────────────────┤  Returns: None (new)     │
+      │                        │  ✓ Vote accepted      │                          │
+      │                        │                       │                          │
+      │  Vote 2: REJECT        │                       │                          │
+      │  (same tx, same node)  │                       │                          │
+      ├───────────────────────►│                       │                          │
+      │                        │  STORE_VOTE()         │                          │
+      │                        ├──────────────────────►│                          │
+      │                        │                       │  Existing: N5→APPROVE    │
+      │                        │◄──────────────────────┤  Returns: APPROVE        │
+      │                        │                       │                          │
+      │                        │  ❌ DOUBLE VOTE!      │                          │
+      │                        │                       │                          │
+      │                        │  BAN_NODE(N5)         │                          │
+      │                        ├──────────────────────►│                          │
+      │                        │                       │  Set: banned:N5 = true   │
+      │                        │                       │  TTL: 24 hours           │
+      │                        │                       │                          │
+      │                        │  RECORD_VIOLATION()   │                          │
+      │                        ├──────────────────────────────────────────────────►│
+      │                        │                       │  INSERT byzantine_       │
+      │                        │                       │  violations (type=       │
+      │                        │                       │  'double_vote')          │
+      │                        │                       │                          │
+      │                        │  SET_TX_STATE()       │                          │
+      │                        ├──────────────────────►│                          │
+      │                        │                       │  State→AbortedByzantine  │
+
+
+Scenario 2: INVALID SIGNATURE DETECTION
+----------------------------------------
+
+Node 5 (Malicious)        Node 1 Detector           PostgreSQL
+      │                        │                          │
+      │  Vote with bad sig     │                          │
+      ├───────────────────────►│                          │
+      │                        │                          │
+      │                        │  VERIFY_SIGNATURE()      │
+      │                        │  ❌ Verification failed  │
+      │                        │                          │
+      │                        │  RECORD_VIOLATION()      │
+      │                        ├─────────────────────────►│
+      │                        │  INSERT (type=           │
+      │                        │  'invalid_signature')    │
+      │                        │                          │
+      │                        │  BAN_NODE(N5)            │
+      │                        │                          │
+
+
+Scenario 3: MINORITY VOTE ATTACK
+---------------------------------
+
+State: 4 nodes already voted APPROVE (threshold reached)
+
+Node 5 (Malicious)        Node 1 Detector           etcd
+      │                        │                       │
+      │  Vote: REJECT          │                       │
+      │  (minority attack)     │                       │
+      ├───────────────────────►│                       │
+      │                        │                       │
+      │                        │  GET_VOTE_COUNTS()    │
+      │                        ├──────────────────────►│
+      │                        │                       │
+      │                        │◄──────────────────────┤
+      │                        │  APPROVE: 4           │
+      │                        │  REJECT: 0            │
+      │                        │  Threshold: 4         │
+      │                        │                       │
+      │                        │  ❌ MINORITY VOTE!    │
+      │                        │  (threshold reached   │
+      │                        │   for APPROVE, but    │
+      │                        │   N5 votes REJECT)    │
+      │                        │                       │
+      │                        │  RECORD_VIOLATION()   │
+      │                        │  BAN_NODE(N5)         │
+
+
+PHASE 4: THRESHOLD REACHED - CONSENSUS ACHIEVED
+================================================
+
+Node 1                    etcd                    PostgreSQL                All Nodes
+  │                         │                          │                         │
+  │  Vote count = 4         │                          │                         │
+  │  Threshold = 4          │                          │                         │
+  │                         │                          │                         │
+  │  ✓ Threshold reached    │                          │                         │
+  │                         │                          │                         │
+  │  SET_TX_STATE()         │                          │                         │
+  ├────────────────────────►│                          │                         │
+  │                         │  tx:state →              │                         │
+  │                         │  ThresholdReached        │                         │
+  │                         │                          │                         │
+  │  UPDATE_TX_STATE()      │                          │                         │
+  ├─────────────────────────────────────────────────────►                         │
+  │                         │  UPDATE transactions     │                         │
+  │                         │  SET state='approved'    │                         │
+  │                         │                          │                         │
+  │  Broadcast consensus reached to all nodes                                    │
+  ├──────────────────────────────────────────────────────────────────────────────►│
+
+
+PHASE 5: SIGNATURE GENERATION (After Consensus)
+================================================
+
+Coordinator (Node 1)      Node 2              Node 3              Node 4              Node 5 (BANNED)
+      │                     │                   │                   │                   │
+      │  Start CGGMP24      │                   │                   │                   X
+      │  signing protocol   │                   │                   │                   EXCLUDED
+      │                     │                   │                   │
+      │  Round 1: Commitments                   │                   │
+      ├────────────────────►├──────────────────►├──────────────────►│
+      │◄────────────────────┤◄──────────────────┤◄──────────────────┤
+      │                     │                   │                   │
+      │  Round 2: Shares    │                   │                   │
+      ├────────────────────►├──────────────────►├──────────────────►│
+      │◄────────────────────┤◄──────────────────┤◄──────────────────┤
+      │                     │                   │                   │
+      │  Combine signatures │                   │                   │
+      │  ✓ Valid signature  │                   │                   │
+
+
+FINITE STATE MACHINE
+====================
+
+                    ┌──────────┐
+                    │ PENDING  │
+                    └─────┬────┘
+                          │
+                    Voting starts
+                          │
+                          ▼
+                  ┌───────────────┐
+           ┌─────►│  COLLECTING   │
+           │      │    VOTES      │
+           │      └───────┬───────┘
+           │              │
+    More votes      Vote received
+    needed          │
+           │        ▼
+           │   ┌─────────────────────┐
+           │   │ BYZANTINE CHECK     │
+           │   └──┬──────────────┬───┘
+           │      │              │
+           │   Valid        Byzantine
+           │      │         violation
+           │      ▼              │
+           │  ┌────────┐         │
+           └──┤ Count  │         │
+              │  += 1  │         │
+              └───┬────┘         │
+                  │              ▼
+           Count < Threshold  ┌──────────────┐
+                  │           │  ABORTED_    │
+                  │           │  BYZANTINE   │
+                  │           └──────────────┘
+           Count >= Threshold
+                  │
+                  ▼
+          ┌────────────────┐
+          │   THRESHOLD    │
+          │    REACHED     │
+          └───────┬────────┘
+                  │
+          Signature generation
+                  │
+                  ▼
+          ┌────────────────┐
+          │    APPROVED    │
+          └───────┬────────┘
+                  │
+          Signature complete
+                  │
+                  ▼
+          ┌────────────────┐
+          │     SIGNED     │
+          └───────┬────────┘
+                  │
+          Broadcast to Bitcoin
+                  │
+                  ▼
+          ┌────────────────┐
+          │  BROADCASTING  │
+          └───────┬────────┘
+                  │
+          Confirmed on chain
+                  │
+                  ▼
+          ┌────────────────┐
+          │   CONFIRMED    │
+          └────────────────┘
+
+
+TIMING DIAGRAM
+==============
+
+Time     Event                                           Duration
+─────────────────────────────────────────────────────────────────
+0ms      Client submits transaction                      -
+10ms     Transaction stored in PostgreSQL                10ms
+15ms     Broadcast to all nodes via QUIC                 5ms
+50ms     All nodes receive transaction                   35ms
+150ms    All nodes validate and generate votes           100ms
+155ms    Votes broadcast via QUIC mesh                    5ms
+200ms    All votes received and processed                45ms
+250ms    Byzantine detection complete (all valid)        50ms
+255ms    Threshold reached (4 votes)                     5ms
+260ms    Consensus achieved                              5ms
+280ms    Signature generation initiated                  20ms
+450ms    CGGMP24 signing complete (with presig)          170ms
+460ms    Transaction broadcast to Bitcoin                10ms
+─────────────────────────────────────────────────────────────────
+Total:   460ms from submission to Bitcoin broadcast
+
+Note: Times assume pre-generated presignatures. Without presignatures,
+      signature generation adds ~1.5-2 seconds.
+
+
+METRICS COLLECTED
+=================
+
+1. mpc_votes_total{node_id, result="approve|reject"}
+2. mpc_byzantine_violations_total{type, node_id}
+3. mpc_vote_processing_duration_seconds (histogram)
+4. mpc_consensus_round_duration_seconds (histogram)
+5. mpc_transactions_total{state}
+6. mpc_consensus_threshold (gauge)

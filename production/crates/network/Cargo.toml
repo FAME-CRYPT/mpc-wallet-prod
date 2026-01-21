@@ -1,0 +1,45 @@
+[package]
+name = "threshold-network"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+# Internal dependencies
+threshold-types = { path = "../types" }
+threshold-security = { path = "../security" }
+
+# QUIC and TLS
+quinn = "0.11"
+rustls = "0.23"
+rustls-pemfile = "2.0"
+
+# Certificate generation and parsing
+rcgen = "0.13"
+x509-parser = "0.16"
+
+# Async runtime
+tokio = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+bincode = "1.3"
+
+# Logging
+tracing = { workspace = true }
+
+# Error handling
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+
+# HTTP client (for registry fetching)
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
+# Base64 for certificate handling
+base64 = "0.22"
+
+# Async trait support
+async-trait = "0.1"
+
+[dev-dependencies]
+tokio-test = "0.4"

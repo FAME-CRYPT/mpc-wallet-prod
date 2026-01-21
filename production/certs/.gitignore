@@ -1,0 +1,14 @@
+# Ignore all certificate and key files for security
+*.key
+*.crt
+*.csr
+*.pem
+*.p12
+*.pfx
+
+# Keep the README
+!README.md
+
+# Keep backup directory structure but not contents
+backups/
+*.backup.*

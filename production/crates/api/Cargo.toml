@@ -1,0 +1,45 @@
+[package]
+name = "threshold-api"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "mpc-wallet-server"
+path = "src/bin/server.rs"
+
+[dependencies]
+# Web framework
+axum.workspace = true
+tower.workspace = true
+tower-http.workspace = true
+
+# Async runtime
+tokio.workspace = true
+
+# Serialization
+serde.workspace = true
+serde_json.workspace = true
+
+# Internal dependencies
+threshold-types = { path = "../types" }
+threshold-bitcoin = { path = "../bitcoin" }
+threshold-storage = { path = "../storage" }
+threshold-consensus = { path = "../consensus" }
+
+# Error handling
+thiserror.workspace = true
+anyhow.workspace = true
+
+# Logging and tracing
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+# Utilities
+chrono.workspace = true
+uuid.workspace = true
+hex.workspace = true
+sha2.workspace = true
+
+# Metrics
+prometheus = { version = "0.13", features = ["process"] }
+lazy_static = "1.4"

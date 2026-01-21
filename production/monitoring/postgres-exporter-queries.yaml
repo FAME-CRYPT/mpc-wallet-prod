@@ -1,0 +1,121 @@
+pg_stat_activity_count:
+  query: "SELECT count(*) as count FROM pg_stat_activity WHERE state = 'active'"
+  metrics:
+    - count:
+        usage: "GAUGE"
+        description: "Number of active connections"
+
+pg_stat_database:
+  query: |
+    SELECT
+      datname,
+      numbackends,
+      xact_commit,
+      xact_rollback,
+      blks_read,
+      blks_hit,
+      tup_returned,
+      tup_fetched,
+      tup_inserted,
+      tup_updated,
+      tup_deleted,
+      deadlocks
+    FROM pg_stat_database
+    WHERE datname = current_database()
+  metrics:
+    - datname:
+        usage: "LABEL"
+        description: "Database name"
+    - numbackends:
+        usage: "GAUGE"
+        description: "Number of backends"
+    - xact_commit:
+        usage: "COUNTER"
+        description: "Number of committed transactions"
+    - xact_rollback:
+        usage: "COUNTER"
+        description: "Number of rolled back transactions"
+    - blks_read:
+        usage: "COUNTER"
+        description: "Number of disk blocks read"
+    - blks_hit:
+        usage: "COUNTER"
+        description: "Number of buffer hits"
+    - tup_returned:
+        usage: "COUNTER"
+        description: "Number of tuples returned"
+    - tup_fetched:
+        usage: "COUNTER"
+        description: "Number of tuples fetched"
+    - tup_inserted:
+        usage: "COUNTER"
+        description: "Number of tuples inserted"
+    - tup_updated:
+        usage: "COUNTER"
+        description: "Number of tuples updated"
+    - tup_deleted:
+        usage: "COUNTER"
+        description: "Number of tuples deleted"
+    - deadlocks:
+        usage: "COUNTER"
+        description: "Number of deadlocks"
+
+pg_stat_statements:
+  query: |
+    SELECT
+      mean_exec_time / 1000 as mean_time_seconds,
+      calls,
+      total_exec_time / 1000 as total_time_seconds
+    FROM pg_stat_statements
+    WHERE queryid IS NOT NULL
+  metrics:
+    - mean_time_seconds:
+        usage: "GAUGE"
+        description: "Mean query execution time in seconds"
+    - calls:
+        usage: "COUNTER"
+        description: "Number of times executed"
+    - total_time_seconds:
+        usage: "COUNTER"
+        description: "Total time spent in seconds"
+
+pg_replication:
+  query: |
+    SELECT
+      CASE WHEN pg_is_in_recovery() THEN 1 ELSE 0 END as is_replica,
+      EXTRACT(EPOCH FROM (now() - pg_last_xact_replay_timestamp()))::INT as replication_lag_seconds
+  metrics:
+    - is_replica:
+        usage: "GAUGE"
+        description: "Is this instance a replica"
+    - replication_lag_seconds:
+        usage: "GAUGE"
+        description: "Replication lag in seconds"
+
+pg_database_size:
+  query: |
+    SELECT
+      pg_database_size(current_database()) as size_bytes
+  metrics:
+    - size_bytes:
+        usage: "GAUGE"
+        description: "Database size in bytes"
+
+pg_table_sizes:
+  query: |
+    SELECT
+      schemaname,
+      tablename,
+      pg_total_relation_size(schemaname||'.'||tablename) as size_bytes
+    FROM pg_tables
+    WHERE schemaname NOT IN ('pg_catalog', 'information_schema')
+  metrics:
+    - schemaname:
+        usage: "LABEL"
+        description: "Schema name"
+    - tablename:
+        usage: "LABEL"
+        description: "Table name"
+    - size_bytes:
+        usage: "GAUGE"
+        description: "Total table size in bytes"

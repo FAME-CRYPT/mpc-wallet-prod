@@ -1,0 +1,30 @@
+# Environment variables with sensitive data
+.env
+
+# Grafana data
+grafana/data/
+grafana/*.db
+grafana/grafana.db
+
+# Prometheus data
+prometheus/data/
+
+# Backup files
+*.backup
+*.bak
+backups/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor files
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# Logs
+*.log
+logs/

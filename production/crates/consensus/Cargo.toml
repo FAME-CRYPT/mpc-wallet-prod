@@ -1,0 +1,26 @@
+[package]
+name = "threshold-consensus"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+threshold-types = { path = "../types" }
+threshold-storage = { path = "../storage" }
+threshold-crypto = { path = "../crypto" }
+
+# Async runtime
+tokio = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Time handling
+chrono = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+
+# Error handling
+thiserror = { workspace = true }
+anyhow = { workspace = true }

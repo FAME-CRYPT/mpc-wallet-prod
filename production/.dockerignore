@@ -1,0 +1,92 @@
+# Docker ignore file for MPC Wallet
+# Excludes unnecessary files from Docker build context
+
+# Git
+.git
+.gitignore
+.gitattributes
+.github
+
+# Documentation
+*.md
+!README.md
+docs/
+detailedplan.md
+
+# Docker
+Dockerfile*
+docker-compose*.yml
+.dockerignore
+docker/.env
+# Allow docker/scripts/ for healthcheck
+
+# Build artifacts
+target/
+**/target/
+# Allow Cargo.lock for reproducible builds
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Tests (exclude e2e integration tests from Docker image)
+e2e/
+tests/
+**/tests/
+benches/
+**/benches/
+examples/
+**/examples/
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+.travis.yml
+azure-pipelines.yml
+
+# Scripts (except init scripts)
+scripts/generate-certs.sh
+scripts/setup-dev.sh
+scripts/benchmark.sh
+
+# Certificates (will be mounted)
+certs/
+*.pem
+*.crt
+*.key
+*.p12
+
+# Config files (will be mounted or env vars)
+config/*.toml
+config/*.yaml
+config/*.json
+.env
+.env.*
+
+# Logs
+logs/
+*.log
+
+# Temp files
+tmp/
+temp/
+*.tmp
+*.bak
+*.backup
+
+# Coverage
+coverage/
+*.profraw
+*.profdata
+
+# Dependencies
+node_modules/
+vendor/
+
+# OS files
+Thumbs.db
+.DS_Store

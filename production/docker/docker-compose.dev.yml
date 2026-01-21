@@ -1,0 +1,95 @@
+version: '3.8'
+
+# Development overlay for docker-compose.yml
+# Usage: docker-compose -f docker-compose.yml -f docker-compose.dev.yml up
+
+services:
+  etcd-1:
+    ports:
+      - "2379:2379"
+      - "2380:2380"
+    environment:
+      - ETCD_LOG_LEVEL=debug
+
+  etcd-2:
+    ports:
+      - "22379:2379"
+      - "22380:2380"
+    environment:
+      - ETCD_LOG_LEVEL=debug
+
+  etcd-3:
+    ports:
+      - "32379:2379"
+      - "32380:2380"
+    environment:
+      - ETCD_LOG_LEVEL=debug
+
+  postgres:
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_LOG_STATEMENT=all
+      - POSTGRES_LOG_MIN_DURATION_STATEMENT=0
+
+  node-1:
+    ports:
+      - "8081:8080"
+      - "9001:9000"
+    environment:
+      - RUST_LOG=debug,mpc_wallet=trace
+      - RUST_BACKTRACE=full
+    volumes:
+      # Mount source code for live development (if using cargo watch)
+      - ../crates:/build/crates:ro
+      # Override with local certs for development
+      - ../certs:/certs:ro
+    command: ["/app/mpc-wallet-server"]
+
+  node-2:
+    ports:
+      - "8082:8080"
+      - "9002:9000"
+    environment:
+      - RUST_LOG=debug,mpc_wallet=trace
+      - RUST_BACKTRACE=full
+    volumes:
+      - ../crates:/build/crates:ro
+      - ../certs:/certs:ro
+    command: ["/app/mpc-wallet-server"]
+
+  node-3:
+    ports:
+      - "8083:8080"
+      - "9003:9000"
+    environment:
+      - RUST_LOG=debug,mpc_wallet=trace
+      - RUST_BACKTRACE=full
+    volumes:
+      - ../crates:/build/crates:ro
+      - ../certs:/certs:ro
+    command: ["/app/mpc-wallet-server"]
+
+  node-4:
+    ports:
+      - "8084:8080"
+      - "9004:9000"
+    environment:
+      - RUST_LOG=debug,mpc_wallet=trace
+      - RUST_BACKTRACE=full
+    volumes:
+      - ../crates:/build/crates:ro
+      - ../certs:/certs:ro
+    command: ["/app/mpc-wallet-server"]
+
+  node-5:
+    ports:
+      - "8085:8080"
+      - "9005:9000"
+    environment:
+      - RUST_LOG=debug,mpc_wallet=trace
+      - RUST_BACKTRACE=full
+    volumes:
+      - ../crates:/build/crates:ro
+      - ../certs:/certs:ro
+    command: ["/app/mpc-wallet-server"]

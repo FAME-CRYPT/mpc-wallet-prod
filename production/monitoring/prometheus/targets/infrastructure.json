@@ -1,0 +1,32 @@
+[
+  {
+    "targets": [
+      "etcd-1:2379"
+    ],
+    "labels": {
+      "service": "etcd",
+      "etcd_cluster": "mpc-wallet",
+      "node_name": "etcd-1"
+    }
+  },
+  {
+    "targets": [
+      "etcd-2:2379"
+    ],
+    "labels": {
+      "service": "etcd",
+      "etcd_cluster": "mpc-wallet",
+      "node_name": "etcd-2"
+    }
+  },
+  {
+    "targets": [
+      "etcd-3:2379"
+    ],
+    "labels": {
+      "service": "etcd",
+      "etcd_cluster": "mpc-wallet",
+      "node_name": "etcd-3"
+    }
+  }
+]

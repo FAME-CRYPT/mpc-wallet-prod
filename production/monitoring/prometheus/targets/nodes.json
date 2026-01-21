@@ -1,0 +1,52 @@
+[
+  {
+    "targets": [
+      "node-1:8080"
+    ],
+    "labels": {
+      "node_id": "1",
+      "service": "mpc-node",
+      "role": "signer"
+    }
+  },
+  {
+    "targets": [
+      "node-2:8080"
+    ],
+    "labels": {
+      "node_id": "2",
+      "service": "mpc-node",
+      "role": "signer"
+    }
+  },
+  {
+    "targets": [
+      "node-3:8080"
+    ],
+    "labels": {
+      "node_id": "3",
+      "service": "mpc-node",
+      "role": "signer"
+    }
+  },
+  {
+    "targets": [
+      "node-4:8080"
+    ],
+    "labels": {
+      "node_id": "4",
+      "service": "mpc-node",
+      "role": "signer"
+    }
+  },
+  {
+    "targets": [
+      "node-5:8080"
+    ],
+    "labels": {
+      "node_id": "5",
+      "service": "mpc-node",
+      "role": "signer"
+    }
+  }
+]

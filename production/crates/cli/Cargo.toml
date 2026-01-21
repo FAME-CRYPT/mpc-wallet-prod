@@ -1,0 +1,29 @@
+[package]
+name = "threshold-cli"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "threshold-wallet"
+path = "src/main.rs"
+
+[dependencies]
+# Workspace dependencies
+threshold-types = { path = "../types" }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+clap = { workspace = true }
+reqwest = { workspace = true }
+
+# CLI-specific dependencies
+colored = "2.1"
+indicatif = "0.17"
+dirs = "5.0"
+toml = "0.8"
+tabled = "0.16"
+dialoguer = "0.11"

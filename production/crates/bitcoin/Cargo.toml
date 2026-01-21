@@ -1,0 +1,31 @@
+[package]
+name = "threshold-bitcoin"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+# Core workspace types
+threshold-types = { path = "../types" }
+
+# Bitcoin
+bitcoin = { workspace = true }
+
+# Async runtime
+tokio = { workspace = true }
+
+# HTTP client
+reqwest = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Error handling
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+
+# Utilities
+hex = { workspace = true }
+
+# Logging
+tracing = { workspace = true }

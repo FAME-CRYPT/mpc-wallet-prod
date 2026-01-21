@@ -1,0 +1,167 @@
+MPC Wallet System Architecture - Complete Overview
+====================================================
+
+┌─────────────────────────────────────────────────────────────────────────────────────┐
+│                              CLIENT LAYER                                            │
+│                                                                                       │
+│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐    ┌──────────────┐     │
+│  │ CLI Tool     │    │ REST Client  │    │ Web UI       │    │ Custom App   │     │
+│  │ (threshold-  │    │ (curl,       │    │ (React/Vue)  │    │ (Python/JS)  │     │
+│  │  wallet)     │    │  Postman)    │    │              │    │              │     │
+│  └──────┬───────┘    └──────┬───────┘    └──────┬───────┘    └──────┬───────┘     │
+│         │                   │                   │                   │               │
+│         └───────────────────┴───────────────────┴───────────────────┘               │
+│                                      │                                               │
+│                              HTTP/HTTPS (REST API)                                   │
+└──────────────────────────────────────┼───────────────────────────────────────────────┘
+                                       │
+┌──────────────────────────────────────▼───────────────────────────────────────────────┐
+│                         MPC WALLET NODE CLUSTER (5 Nodes)                            │
+│                              Threshold: 4-of-5                                        │
+│                                                                                       │
+│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐│
+│  │  Node 1         │  │  Node 2         │  │  Node 3         │  │  Node 4         ││
+│  │  ┌───────────┐  │  │  ┌───────────┐  │  │  ┌───────────┐  │  │  ┌───────────┐  ││
+│  │  │ REST API  │  │  │  │ REST API  │  │  │  │ REST API  │  │  │  │ REST API  │  ││
+│  │  │ :8080     │  │  │  │ :8080     │  │  │  │ :8080     │  │  │  │ :8080     │  ││
+│  │  └───────────┘  │  │  └───────────┘  │  │  └───────────┘  │  │  └───────────┘  ││
+│  │  ┌───────────┐  │  │  ┌───────────┐  │  │  ┌───────────┐  │  │  ┌───────────┐  ││
+│  │  │Consensus  │  │  │  │Consensus  │  │  │  │Consensus  │  │  │  │Consensus  │  ││
+│  │  │Byzantine  │  │  │  │Byzantine  │  │  │  │Byzantine  │  │  │  │Byzantine  │  ││
+│  │  │Detector   │  │  │  │Detector   │  │  │  │Detector   │  │  │  │Detector   │  ││
+│  │  └───────────┘  │  │  └───────────┘  │  │  └───────────┘  │  │  └───────────┘  ││
+│  │  ┌───────────┐  │  │  ┌───────────┐  │  │  ┌───────────┐  │  │  ┌───────────┐  ││
+│  │  │  CGGMP24  │  │  │  │  CGGMP24  │  │  │  │  CGGMP24  │  │  │  │  CGGMP24  │  ││
+│  │  │  + FROST  │  │  │  │  + FROST  │  │  │  │  + FROST  │  │  │  │  + FROST  │  ││
+│  │  │  Protocols│  │  │  │  Protocols│  │  │  │  Protocols│  │  │  │  Protocols│  ││
+│  │  └───────────┘  │  │  └───────────┘  │  │  └───────────┘  │  │  └───────────┘  ││
+│  │  ┌───────────┐  │  │  ┌───────────┐  │  │  ┌───────────┐  │  │  ┌───────────┐  ││
+│  │  │Key Share  │  │  │  │Key Share  │  │  │  │Key Share  │  │  │  │Key Share  │  ││
+│  │  │Storage    │  │  │  │Storage    │  │  │  │Storage    │  │  │  │Storage    │  ││
+│  │  └───────────┘  │  │  └───────────┘  │  │  └───────────┘  │  │  └───────────┘  ││
+│  │  ┌───────────┐  │  │  ┌───────────┐  │  │  ┌───────────┐  │  │  ┌───────────┐  ││
+│  │  │ Bitcoin   │  │  │  │ Bitcoin   │  │  │  │ Bitcoin   │  │  │  │ Bitcoin   │  ││
+│  │  │ Client    │  │  │  │ Client    │  │  │  │ Client    │  │  │  │ Client    │  ││
+│  │  └───────────┘  │  │  └───────────┘  │  │  └───────────┘  │  │  └───────────┘  ││
+│  │  QUIC:9000     │  │  QUIC:9000     │  │  QUIC:9000     │  │  QUIC:9000     │  ││
+│  └────────┬────────┘  └────────┬────────┘  └────────┬────────┘  └────────┬────────┘│
+│           │                    │                    │                    │          │
+│           │     ┌──────────────┴────────────────────┴───────────────┐    │          │
+│           │     │             Node 5                                 │    │          │
+│           │     │  ┌───────────┐  ┌───────────┐  ┌───────────┐     │    │          │
+│           │     │  │ REST API  │  │Consensus  │  │  Protocols│     │    │          │
+│           │     │  │ :8080     │  │Byzantine  │  │CGGMP24    │     │    │          │
+│           │     │  └───────────┘  │Detector   │  │+ FROST    │     │    │          │
+│           │     │                 └───────────┘  └───────────┘     │    │          │
+│           │     │  ┌───────────┐  ┌───────────┐                    │    │          │
+│           │     │  │Key Share  │  │ Bitcoin   │  QUIC:9000         │    │          │
+│           │     │  │Storage    │  │ Client    │                    │    │          │
+│           │     │  └───────────┘  └───────────┘                    │    │          │
+│           │     └────────────────────────┬───────────────────────────────┘          │
+│           │                              │                                          │
+│           └──────────────────────────────┴──────────────────────────────────────────┘
+│                                          │                                           │
+│                         QUIC + mTLS P2P Mesh Network                                │
+│                    (Certificate-based Mutual Authentication)                         │
+└──────────────────────────────────────────┼───────────────────────────────────────────┘
+                                           │
+        ┌──────────────────────────────────┼──────────────────────────────────┐
+        │                                  │                                  │
+        │                                  │                                  │
+┌───────▼────────┐              ┌──────────▼──────────┐          ┌───────────▼────────┐
+│  etcd Cluster  │              │   PostgreSQL DB     │          │  Bitcoin Network   │
+│  (3 nodes)     │              │   (Single Instance) │          │   (Testnet/       │
+│                │              │                     │          │    Mainnet)        │
+│  ┌──────────┐  │              │  ┌───────────────┐ │          │                    │
+│  │ etcd-1   │  │              │  │ transactions  │ │          │  Esplora API       │
+│  │ :2379    │◄─┼─────Raft────►│  │ votes         │ │          │  (Blockchain       │
+│  │ :2380    │  │              │  │ voting_rounds │ │          │   Queries)         │
+│  └──────────┘  │              │  │ byzantine_    │ │          │                    │
+│  ┌──────────┐  │              │  │   violations  │ │          │  https://          │
+│  │ etcd-2   │◄─┼─────Raft────►│  │ presignature_ │ │          │  blockstream.info/ │
+│  │ :2379    │  │              │  │   usage       │ │          │  testnet/api       │
+│  │ :2380    │  │              │  │ node_status   │ │          │                    │
+│  └──────────┘  │              │  │ audit_log     │ │          └────────────────────┘
+│  ┌──────────┐  │              │  └───────────────┘ │
+│  │ etcd-3   │  │              │                     │
+│  │ :2379    │◄─┼─────Raft────►│  Views:             │
+│  │ :2380    │  │              │  - transaction_     │
+│  └──────────┘  │              │      summary        │
+│                │              │  - node_health      │
+│  Stores:       │              │                     │
+│  - Config      │              │  Triggers:          │
+│  - Vote counts │              │  - State changes    │
+│  - TX state    │              │  - Violation        │
+│  - Peer status │              │      detection      │
+│  - Bans        │              │                     │
+└────────────────┘              └─────────────────────┘
+
+
+MONITORING LAYER (Optional)
+===========================
+
+┌─────────────────────────────────────────────────────────────────────┐
+│  Grafana :3000                                                       │
+│  ┌────────────────┐  ┌────────────────┐  ┌────────────────┐        │
+│  │ MPC Cluster    │  │ Byzantine      │  │ Signature      │        │
+│  │ Overview       │  │ Consensus      │  │ Performance    │        │
+│  └────────────────┘  └────────────────┘  └────────────────┘        │
+│  ┌────────────────┐  ┌────────────────┐                            │
+│  │ Infrastructure │  │ Network        │                            │
+│  │ Monitoring     │  │ Monitoring     │                            │
+│  └────────────────┘  └────────────────┘                            │
+└────────────────────────────┬────────────────────────────────────────┘
+                             │
+┌────────────────────────────▼────────────────────────────────────────┐
+│  Prometheus :9090                                                    │
+│  - Scrapes metrics from all MPC nodes (:8080/metrics)               │
+│  - Scrapes PostgreSQL exporter (:9187)                              │
+│  - Scrapes etcd metrics (:2379/metrics)                             │
+│  - Scrapes cAdvisor container metrics (:8081)                       │
+│  - 30 day retention                                                 │
+│  - Alert rule evaluation                                            │
+└─────────────────────────────────────────────────────────────────────┘
+
+
+DATA FLOW - Transaction Lifecycle
+==================================
+
+1. CREATE TRANSACTION
+   Client → Node API → PostgreSQL (pending state)
+
+2. BYZANTINE CONSENSUS VOTING
+   Node → etcd (vote storage) → Byzantine Detector → PostgreSQL (vote record)
+
+3. THRESHOLD SIGNING
+   Nodes → CGGMP24/FROST Protocol → Presignature Pool → Signature Generation
+
+4. BITCOIN BROADCAST
+   Node → Esplora API → Bitcoin Network
+
+5. CONFIRMATION MONITORING
+   Node → Esplora API → PostgreSQL (confirmed state)
+
+
+SECURITY BOUNDARIES
+===================
+
+┌─────────────────────────────────────────────────────────────────┐
+│ TRUST ZONE 1: Client Layer (Untrusted)                          │
+│ - Public internet exposure                                       │
+│ - Authentication required                                        │
+│ - Rate limiting enforced                                         │
+└─────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────┐
+│ TRUST ZONE 2: MPC Node Mesh (Semi-Trusted)                      │
+│ - mTLS authentication between nodes                              │
+│ - Byzantine detection active                                     │
+│ - Up to 1 malicious node tolerated (4-of-5 threshold)           │
+└─────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────┐
+│ TRUST ZONE 3: Infrastructure (Trusted)                           │
+│ - Internal network only                                          │
+│ - No direct external access                                      │
+│ - Strong authentication required                                 │
+└─────────────────────────────────────────────────────────────────┘

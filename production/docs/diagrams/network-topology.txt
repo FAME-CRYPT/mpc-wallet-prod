@@ -1,0 +1,382 @@
+Network Topology - QUIC + mTLS Mesh Architecture
+=================================================
+
+FULL MESH TOPOLOGY (5 Nodes, Complete Graph)
+=============================================
+
+Each node maintains QUIC connections to all other nodes (4 connections per node)
+Total connections in cluster: 10 bidirectional QUIC streams
+
+
+                              ┌─────────────┐
+                              │   Node 1    │
+                              │  ID: 1      │
+                              │  QUIC: 9000 │
+                              │  API: 8080  │
+                              └──────┬──────┘
+                    ┌────────────────┼────────────────┐
+                    │                │                │
+            ┌───────▼──────┐    ┌────▼────┐    ┌─────▼──────┐
+            │   Node 2     │    │ Node 3  │    │   Node 4   │
+            │  ID: 2       │    │ ID: 3   │    │  ID: 4     │
+            │  QUIC: 9000  │◄───┤QUIC:9000│───►│  QUIC: 9000│
+            │  API: 8080   │    │API: 8080│    │  API: 8080 │
+            └───────┬──────┘    └────┬────┘    └──────┬─────┘
+                    │                │                │
+                    └────────────────┼────────────────┘
+                                     │
+                              ┌──────▼──────┐
+                              │   Node 5    │
+                              │  ID: 5      │
+                              │  QUIC: 9000 │
+                              │  API: 8080  │
+                              └─────────────┘
+
+
+CONNECTION MATRIX
+=================
+
+            Node1   Node2   Node3   Node4   Node5
+Node1       -       ✓       ✓       ✓       ✓
+Node2       ✓       -       ✓       ✓       ✓
+Node3       ✓       ✓       -       ✓       ✓
+Node4       ✓       ✓       ✓       -       ✓
+Node5       ✓       ✓       ✓       ✓       -
+
+Total: 20 unidirectional streams (10 bidirectional connections)
+
+
+QUIC CONNECTION DETAILS
+========================
+
+Node 1 Perspective:
+┌──────────────────────────────────────────────────────────────┐
+│ Outbound Connections:                                         │
+│                                                               │
+│  node-2:9000  ──mTLS──►  Certificate: node2.crt              │
+│  node-3:9000  ──mTLS──►  Certificate: node3.crt              │
+│  node-4:9000  ──mTLS──►  Certificate: node4.crt              │
+│  node-5:9000  ──mTLS──►  Certificate: node5.crt              │
+│                                                               │
+│ Inbound Connections:                                          │
+│                                                               │
+│  node-2:9000  ◄──mTLS──  Verify: ca.crt → node2.crt         │
+│  node-3:9000  ◄──mTLS──  Verify: ca.crt → node3.crt         │
+│  node-4:9000  ◄──mTLS──  Verify: ca.crt → node4.crt         │
+│  node-5:9000  ◄──mTLS──  Verify: ca.crt → node5.crt         │
+│                                                               │
+│ Local Certificate:                                            │
+│  - Certificate: /certs/node1.crt                             │
+│  - Private Key: /certs/node1.key                             │
+│  - CA Cert:     /certs/ca.crt (for verification)            │
+└──────────────────────────────────────────────────────────────┘
+
+
+mTLS HANDSHAKE FLOW
+===================
+
+Node 1                                                    Node 2
+  │                                                         │
+  │  1. TCP Connection Establishment                       │
+  ├────────────────────────────────────────────────────────►│
+  │                                                         │
+  │  2. QUIC Handshake + TLS 1.3                           │
+  │                                                         │
+  │  ClientHello                                            │
+  │  - SNI: node-2                                          │
+  │  - Supported Ciphers                                    │
+  ├────────────────────────────────────────────────────────►│
+  │                                                         │
+  │                                          ServerHello    │
+  │                                          - Certificate  │
+  │                                            (node2.crt)  │
+  │                                          - CertificateReq│
+  │◄────────────────────────────────────────────────────────┤
+  │                                                         │
+  │  3. Mutual Authentication                               │
+  │                                                         │
+  │  Certificate Verify                                     │
+  │  - Send node1.crt                                       │
+  │  - Signature with node1.key                            │
+  ├────────────────────────────────────────────────────────►│
+  │                                                         │
+  │                                                         │ Verify:
+  │                                                         │ - Check node1.crt
+  │                                                         │   signed by ca.crt
+  │                                                         │ - Check CN matches
+  │                                                         │   expected peer
+  │                                                         │
+  │                                             Finished    │
+  │◄────────────────────────────────────────────────────────┤
+  │                                                         │
+  │  Finished                                               │
+  ├────────────────────────────────────────────────────────►│
+  │                                                         │
+  │  ✓ mTLS Connection Established                         │
+  │  ✓ Encrypted QUIC stream ready                         │
+  │                                                         │
+
+
+NETWORK LAYERS
+==============
+
+┌──────────────────────────────────────────────────────────────┐
+│ Application Layer                                             │
+│ - Vote messages                                               │
+│ - Signature protocol messages                                 │
+│ - Transaction broadcasts                                      │
+│ - DKG ceremony messages                                       │
+└───────────────────────────┬──────────────────────────────────┘
+                            │
+┌───────────────────────────▼──────────────────────────────────┐
+│ MPC Protocol Layer                                            │
+│ - Message serialization (bincode/JSON)                        │
+│ - Protocol routing                                            │
+│ - Session management                                          │
+└───────────────────────────┬──────────────────────────────────┘
+                            │
+┌───────────────────────────▼──────────────────────────────────┐
+│ QUIC Transport Layer (Quinn)                                  │
+│ - Multiple streams per connection                             │
+│ - Stream multiplexing                                         │
+│ - Congestion control (BBR/Cubic)                             │
+│ - Packet loss recovery                                        │
+│ - 0-RTT connection resumption                                │
+└───────────────────────────┬──────────────────────────────────┘
+                            │
+┌───────────────────────────▼──────────────────────────────────┐
+│ TLS 1.3 Encryption (rustls)                                   │
+│ - AES-256-GCM encryption                                      │
+│ - ChaCha20-Poly1305 (alternative)                            │
+│ - Perfect forward secrecy (ECDHE)                            │
+│ - Certificate-based authentication                            │
+└───────────────────────────┬──────────────────────────────────┘
+                            │
+┌───────────────────────────▼──────────────────────────────────┐
+│ UDP Layer                                                     │
+│ - Connectionless datagrams                                    │
+│ - Port: 9000 (default)                                       │
+└───────────────────────────┬──────────────────────────────────┘
+                            │
+┌───────────────────────────▼──────────────────────────────────┐
+│ Network Layer (IP)                                            │
+│ - IPv4 / IPv6                                                 │
+│ - Routing between nodes                                       │
+└──────────────────────────────────────────────────────────────┘
+
+
+MESSAGE FLOW EXAMPLE: Broadcasting a Vote
+==========================================
+
+Node 1 wants to broadcast vote to all nodes:
+
+                    ┌─────────────┐
+                    │   Node 1    │
+                    │             │
+                    │  vote_msg = │
+                    │  {          │
+                    │   tx_id,    │
+                    │   value,    │
+                    │   signature │
+                    │  }          │
+                    └──────┬──────┘
+                           │
+            ┌──────────────┼──────────────┐
+            │              │              │
+            ▼              ▼              ▼
+    ┌──────────────┐ ┌──────────┐ ┌──────────────┐
+    │   Node 2     │ │  Node 3  │ │   Node 4     │
+    │              │ │          │ │              │
+    │ QUIC Stream  │ │  QUIC    │ │ QUIC Stream  │
+    │ ID: 0x1a2b   │ │  Stream  │ │ ID: 0x3c4d   │
+    │              │ │ID:0x2b3c │ │              │
+    │ Receive vote │ │  Receive │ │ Receive vote │
+    │ Process via  │ │  vote    │ │ Process via  │
+    │ Byzantine    │ │  Process │ │ Byzantine    │
+    │ Detector     │ │  via     │ │ Detector     │
+    │              │ │Byzantine │ │              │
+    └──────────────┘ │Detector  │ └──────────────┘
+                     └──────────┘
+                           │
+                           ▼
+                    ┌──────────────┐
+                    │   Node 5     │
+                    │              │
+                    │ QUIC Stream  │
+                    │ ID: 0x4d5e   │
+                    │              │
+                    │ Receive vote │
+                    │ Process via  │
+                    │ Byzantine    │
+                    │ Detector     │
+                    └──────────────┘
+
+Parallel transmission: All 4 messages sent concurrently
+Total time: ~20-30ms (single RTT + processing)
+
+
+NETWORK FAILURE SCENARIOS
+==========================
+
+Scenario 1: Single Node Failure
+--------------------------------
+
+Node 3 goes offline:
+
+                    ┌─────────────┐
+                    │   Node 1    │
+                    └──────┬──────┘
+                ┌──────────┼──────────┐
+                │          │          │
+            ┌───▼───┐      X      ┌───▼───┐
+            │Node 2 │   Node 3    │Node 4 │
+            └───┬───┘  (OFFLINE)  └───┬───┘
+                └──────────┼──────────┘
+                           │
+                    ┌──────▼──────┐
+                    │   Node 5    │
+                    └─────────────┘
+
+Result: Cluster continues operating
+- Threshold still achievable (4 of 4 remaining nodes)
+- Degraded performance (lost redundancy)
+- Alert: MPCClusterDegraded
+
+
+Scenario 2: Network Partition
+------------------------------
+
+Partition splits cluster into two groups:
+
+    Group A              Group B
+┌─────────────┐      ┌─────────────┐
+│   Node 1    │      │   Node 4    │
+└──────┬──────┘      └──────┬──────┘
+   ┌───▼───┐            ┌───▼───┐
+   │Node 2 │            │Node 5 │
+   └───┬───┘            └───────┘
+   ┌───▼───┐
+   │Node 3 │
+   └───────┘
+
+Group A: 3 nodes (can reach threshold)
+Group B: 2 nodes (cannot reach threshold)
+
+Result: Split brain prevented by etcd
+- etcd maintains quorum in Group A only
+- Group B cannot proceed with operations
+- Automatic healing when partition resolves
+
+
+DOCKER NETWORKING
+=================
+
+Development (docker-compose):
+┌────────────────────────────────────────────────────────────┐
+│ Bridge Network: mpc-wallet_mpc-internal                    │
+│                                                            │
+│  node-1:9000 ◄──────────────────────► node-2:9000        │
+│  node-1:9000 ◄──────────────────────► node-3:9000        │
+│  node-1:9000 ◄──────────────────────► node-4:9000        │
+│  node-1:9000 ◄──────────────────────► node-5:9000        │
+│                                                            │
+│  Service discovery via Docker DNS                          │
+└────────────────────────────────────────────────────────────┘
+
+Production (Multi-host):
+┌────────────────────────────────────────────────────────────┐
+│ Host 1 (10.0.1.10)                                         │
+│  ├─ node-1:9000 (exposed on 10.0.1.10:9000)              │
+│  └─ node-2:9000 (exposed on 10.0.1.10:9001)              │
+└────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────┐
+│ Host 2 (10.0.1.11)                                         │
+│  ├─ node-3:9000 (exposed on 10.0.1.11:9000)              │
+│  └─ node-4:9000 (exposed on 10.0.1.11:9001)              │
+└────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────┐
+│ Host 3 (10.0.1.12)                                         │
+│  └─ node-5:9000 (exposed on 10.0.1.12:9000)              │
+└────────────────────────────────────────────────────────────┘
+
+Bootstrap peers configured as:
+BOOTSTRAP_PEERS=10.0.1.10:9001,10.0.1.11:9000,10.0.1.11:9001,10.0.1.12:9000
+
+
+FIREWALL RULES
+==============
+
+Minimum required open ports:
+
+Inbound:
+- UDP 9000 (QUIC P2P) - from other MPC nodes only
+- TCP 8080 (REST API) - from clients/load balancer only
+
+Outbound:
+- UDP 9000 (QUIC P2P) - to other MPC nodes
+- TCP 443 (HTTPS) - to Esplora API (blockstream.info)
+- TCP 2379 (etcd) - to etcd cluster (internal)
+- TCP 5432 (PostgreSQL) - to database (internal)
+
+Example iptables:
+```bash
+# Allow QUIC from known MPC nodes
+iptables -A INPUT -p udp --dport 9000 -s 10.0.1.0/24 -j ACCEPT
+
+# Allow API from load balancer
+iptables -A INPUT -p tcp --dport 8080 -s 10.0.2.100 -j ACCEPT
+
+# Drop all other inbound
+iptables -A INPUT -j DROP
+```
+
+
+BANDWIDTH & LATENCY REQUIREMENTS
+=================================
+
+Expected traffic per node:
+
+Idle:
+- Heartbeats: ~1 KB/s
+- etcd sync: ~5 KB/s
+- Total: ~10 KB/s (~80 Kbps)
+
+Active (10 tx/min):
+- Votes: ~5 KB/tx * 4 nodes = 20 KB/tx
+- Signatures: ~50 KB/tx * 4 nodes = 200 KB/tx
+- Total: ~220 KB/tx * 10/min = ~30 KB/s (~250 Kbps)
+
+Peak (100 tx/min):
+- Total: ~300 KB/s (~2.5 Mbps)
+
+Recommended:
+- Minimum: 10 Mbps symmetric
+- Recommended: 100 Mbps symmetric
+- Latency: <50ms between nodes
+- Packet loss: <0.1%
+
+
+MONITORING METRICS
+==================
+
+Network health metrics:
+
+1. mpc_connected_peers{node_id}
+   - Gauge: Number of active QUIC connections
+   - Expected: 4 (in 5-node cluster)
+
+2. mpc_network_errors_total{node_id, error_type}
+   - Counter: Network-related errors
+   - Types: connection, timeout, handshake
+
+3. mpc_tls_handshake_failures_total{node_id}
+   - Counter: Failed mTLS handshakes
+   - Investigate if non-zero
+
+4. mpc_network_bandwidth_bytes{node_id, direction}
+   - Gauge: Network throughput
+   - Direction: rx, tx
+
+5. mpc_quic_rtt_seconds{node_id, peer_id}
+   - Histogram: Round-trip time to each peer
+   - Alert if >100ms

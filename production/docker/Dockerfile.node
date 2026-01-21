@@ -1,0 +1,103 @@
+# Multi-stage build for MPC Wallet Node
+# Stage 1: Builder - Compile the Rust workspace
+FROM rust:alpine AS builder
+
+# Install build dependencies
+RUN apk add --no-cache \
+    musl-dev \
+    openssl-dev \
+    openssl-libs-static \
+    pkgconfig \
+    protobuf-dev \
+    git
+
+# Set working directory
+WORKDIR /build
+
+# Copy workspace manifests first for better layer caching
+COPY Cargo.toml Cargo.lock ./
+
+# Copy all crate manifests
+COPY crates/types/Cargo.toml ./crates/types/
+COPY crates/common/Cargo.toml ./crates/common/
+COPY crates/crypto/Cargo.toml ./crates/crypto/
+COPY crates/storage/Cargo.toml ./crates/storage/
+COPY crates/network/Cargo.toml ./crates/network/
+COPY crates/security/Cargo.toml ./crates/security/
+COPY crates/consensus/Cargo.toml ./crates/consensus/
+COPY crates/protocols/Cargo.toml ./crates/protocols/
+COPY crates/bitcoin/Cargo.toml ./crates/bitcoin/
+COPY crates/api/Cargo.toml ./crates/api/
+COPY crates/cli/Cargo.toml ./crates/cli/
+
+# Create dummy source files to build dependencies
+RUN mkdir -p crates/types/src crates/common/src crates/crypto/src \
+    crates/storage/src crates/network/src crates/security/src \
+    crates/consensus/src crates/protocols/src crates/bitcoin/src \
+    crates/api/src crates/api/src/bin crates/cli/src && \
+    echo "fn main() {}" > crates/api/src/bin/server.rs && \
+    echo "fn main() {}" > crates/cli/src/main.rs && \
+    for dir in types common crypto storage network security consensus protocols bitcoin; do \
+        echo "pub fn dummy() {}" > crates/$dir/src/lib.rs; \
+    done && \
+    echo "pub fn dummy() {}" > crates/api/src/lib.rs
+
+# Build dependencies only (this layer will be cached)
+RUN cargo build --release --bin mpc-wallet-server
+
+# Remove dummy source files
+RUN rm -rf crates/*/src
+
+# Copy actual source code
+COPY crates/ ./crates/
+
+# Build the actual binary with all optimizations
+# Clean to force rebuild since we replaced dummy sources
+RUN cargo clean --release && \
+    cargo build --release --bin mpc-wallet-server && \
+    strip target/release/mpc-wallet-server
+
+# Stage 2: Runtime - Minimal Alpine image
+FROM alpine:3.19
+
+# Install runtime dependencies
+RUN apk add --no-cache \
+    ca-certificates \
+    libgcc \
+    openssl \
+    tzdata && \
+    addgroup -g 1000 mpc && \
+    adduser -D -u 1000 -G mpc mpc
+
+# Set working directory
+WORKDIR /app
+
+# Copy binary from builder
+COPY --from=builder /build/target/release/mpc-wallet-server /app/mpc-wallet-server
+
+# Copy healthcheck script
+COPY docker/scripts/healthcheck.sh /app/healthcheck.sh
+RUN chmod +x /app/healthcheck.sh /app/mpc-wallet-server
+
+# Create directories for certificates and data
+RUN mkdir -p /certs /data && \
+    chown -R mpc:mpc /app /certs /data
+
+# Switch to non-root user
+USER mpc
+
+# Expose ports
+# 8080 - HTTP API
+# 9000 - QUIC P2P communication
+EXPOSE 8080 9000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD ["/app/healthcheck.sh"]
+
+# Set environment variables
+ENV RUST_LOG=info \
+    RUST_BACKTRACE=1
+
+# Run the server
+ENTRYPOINT ["/app/mpc-wallet-server"]
