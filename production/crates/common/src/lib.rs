@@ -2,6 +2,8 @@
 
 pub mod bitcoin_tx;
 pub mod bitcoin_utils;
+pub mod bitcoin_address;
+pub mod crypto;
 pub mod discovery;
 pub mod grant;
 pub mod observability;
@@ -43,6 +45,17 @@ pub use types::{
 pub use discovery::{
     HeartbeatRequest, HeartbeatResponse, ListNodesResponse, NodeCapabilities, NodeHealthMetrics,
     NodeInfo, ProtocolCapability, RegisterNodeRequest, RegisterNodeResponse,
+};
+
+// Re-export bitcoin address and crypto utilities
+pub use bitcoin_address::{
+    derive_p2tr_address, derive_p2wpkh_address, validate_address, AddressType as BtcAddressType,
+    BitcoinAddressInfo, BitcoinNetwork as BtcNetwork,
+};
+pub use crypto::{
+    compute_sighash_ecdsa, compute_sighash_taproot, der_to_bitcoin_signature, double_sha256,
+    parse_compressed_pubkey, serialize_compressed_pubkey, tagged_hash, verify_ecdsa_signature,
+    verify_schnorr_signature, TaprootPrevout,
 };
 
 /// Fixed number of MPC nodes.

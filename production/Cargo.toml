@@ -94,6 +94,7 @@ clap = { version = "4.4", features = ["derive"] }
 # Bitcoin
 bitcoin = { version = "0.32", features = ["serde"] }
 bdk = { version = "0.29", features = ["esplora-ureq"] }
+bech32 = "0.11"
 hmac = "0.12"
 ripemd = "0.1"
 rusqlite = { version = "0.38", features = ["bundled"] }

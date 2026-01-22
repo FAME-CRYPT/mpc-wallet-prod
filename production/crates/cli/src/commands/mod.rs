@@ -1,5 +1,6 @@
 //! Command implementations for the CLI.
 
+pub mod aux_info;
 pub mod cluster;
 pub mod dkg;
 pub mod presig;

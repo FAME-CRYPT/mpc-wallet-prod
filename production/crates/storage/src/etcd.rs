@@ -255,9 +255,9 @@ impl EtcdStorage {
     }
 
     /// Internal method to acquire a lock with TTL
-    async fn acquire_lock_internal(&mut self, key: &str, ttl_secs: i64) -> Result<i64> {
-        let lease_resp = self
-            .client
+    async fn acquire_lock_internal(&self, key: &str, ttl_secs: i64) -> Result<i64> {
+        let mut client = self.client.clone();
+        let lease_resp = client
             .lease_grant(ttl_secs, None)
             .await
             .map_err(|e| Error::StorageError(format!("Failed to create lease: {}", e)))?;
@@ -282,8 +282,7 @@ impl EtcdStorage {
             )])
             .or_else(vec![]);
 
-        let txn_resp = self
-            .client
+        let txn_resp = client
             .txn(txn)
             .await
             .map_err(|e| Error::StorageError(format!("Failed to acquire lock: {}", e)))?;
@@ -300,8 +299,9 @@ impl EtcdStorage {
     }
 
     /// Internal method to release a lock
-    async fn release_lock_internal(&mut self, key: &str) -> Result<()> {
-        self.client
+    async fn release_lock_internal(&self, key: &str) -> Result<()> {
+        let mut client = self.client.clone();
+        client
             .delete(key.as_bytes(), None)
             .await
             .map_err(|e| Error::StorageError(format!("Failed to release lock: {}", e)))?;
@@ -717,13 +717,13 @@ impl EtcdStorage {
     // ============================================================================
 
     /// Legacy method: acquire lock for submission (maps to signing lock)
-    pub async fn acquire_lock(&mut self, tx_id: &TxId, ttl_secs: i64) -> Result<i64> {
+    pub async fn acquire_submission_lock(&mut self, tx_id: &TxId, ttl_secs: i64) -> Result<i64> {
         let key = format!("/locks/submission/{}", tx_id);
         self.acquire_lock_internal(&key, ttl_secs).await
     }
 
     /// Legacy method: release submission lock
-    pub async fn release_lock(&mut self, tx_id: &TxId) -> Result<()> {
+    pub async fn release_submission_lock(&mut self, tx_id: &TxId) -> Result<()> {
         let key = format!("/locks/submission/{}", tx_id);
         self.release_lock_internal(&key).await
     }
@@ -751,6 +751,48 @@ impl EtcdStorage {
     pub async fn set_config_total_nodes(&mut self, total_nodes: usize) -> Result<()> {
         info!("Set total_nodes to {}", total_nodes);
         Ok(())
+    }
+
+    // ============================================================================
+    // DKG and Generic Lock/Storage Operations
+    // ============================================================================
+
+    /// Acquire a generic distributed lock with TTL
+    pub async fn acquire_lock(&self, key: &str, ttl_secs: i64) -> Result<bool> {
+        match self.acquire_lock_internal(key, ttl_secs).await {
+            Ok(_lease_id) => Ok(true),
+            Err(_) => Ok(false),
+        }
+    }
+
+    /// Release a generic distributed lock
+    pub async fn release_lock(&self, key: &str) -> Result<()> {
+        self.release_lock_internal(key).await
+    }
+
+    /// Put a key-value pair in etcd
+    pub async fn put(&self, key: &str, value: &[u8]) -> Result<()> {
+        let mut client = self.client.clone();
+        client
+            .put(key.as_bytes(), value, None)
+            .await
+            .map_err(|e| Error::StorageError(format!("Failed to put key: {}", e)))?;
+        Ok(())
+    }
+
+    /// Get a value from etcd
+    pub async fn get(&mut self, key: &str) -> Result<Option<Vec<u8>>> {
+        let resp = self
+            .client
+            .get(key.as_bytes(), None)
+            .await
+            .map_err(|e| Error::StorageError(format!("Failed to get key: {}", e)))?;
+
+        if resp.kvs().is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(resp.kvs()[0].value().to_vec()))
+        }
     }
 }
 

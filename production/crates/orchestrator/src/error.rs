@@ -37,6 +37,30 @@ pub enum OrchestrationError {
 
     #[error("Internal error: {0}")]
     Internal(String),
+
+    #[error("Invalid configuration: {0}")]
+    InvalidConfig(String),
+
+    #[error("DKG ceremony already in progress: {0}")]
+    CeremonyInProgress(String),
+
+    #[error("DKG ceremony not found: {0}")]
+    CeremonyNotFound(uuid::Uuid),
+
+    #[error("Invalid public key: {0}")]
+    InvalidPublicKey(String),
+
+    #[error("Network error: {0}")]
+    NetworkError(String),
+
+    #[error("Serialization error: {0}")]
+    SerializationError(String),
+
+    #[error("Storage error: {0}")]
+    StorageError(String),
+
+    #[error("Not implemented: {0}")]
+    NotImplemented(String),
 }
 
 impl From<tokio::task::JoinError> for OrchestrationError {

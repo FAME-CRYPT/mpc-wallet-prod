@@ -9,7 +9,7 @@ use std::sync::Arc;
 use quinn::{Connection, Endpoint, RecvStream, ServerConfig};
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 use threshold_types::{NetworkMessage, NodeId};
 use crate::error::{NetworkError, NetworkResult};
@@ -154,20 +154,20 @@ pub async fn handle_incoming_connection(connection: Connection, incoming_queue: 
     let remote_addr = connection.remote_address();
     info!("Handling incoming QUIC connection from {}", remote_addr);
 
-    // TODO: Extract authenticated node ID from peer's TLS certificate
-    // This will be implemented once cert_manager integration is complete
+    // Extract authenticated node ID from peer's TLS certificate
     let authenticated_node = extract_peer_node_id(&connection);
     match authenticated_node {
         Some(node_id) => {
             info!("Authenticated peer {} as node {}", remote_addr, node_id);
         }
         None => {
-            warn!(
-                "Could not extract node ID from peer certificate for {}",
+            error!(
+                "Could not extract node ID from peer certificate for {}. Closing connection.",
                 remote_addr
             );
-            // For now, allow connection for development
-            // TODO: Close connection once mTLS is enforced
+            // SECURITY: Close connection - do NOT allow unauthenticated peers
+            connection.close(0u32.into(), b"Authentication required");
+            return;
         }
     }
 
@@ -197,11 +197,75 @@ pub async fn handle_incoming_connection(connection: Connection, incoming_queue: 
 
 /// Extract the node ID from a peer's TLS certificate.
 ///
-/// TODO: This will be implemented once cert_manager integration is complete.
-/// The node ID will be stored in the certificate subject or extension.
-fn extract_peer_node_id(_connection: &Connection) -> Option<NodeId> {
-    // PLACEHOLDER: Will extract node ID from mTLS certificate
-    // For now, return None to allow development without mTLS
+/// Parses the peer's TLS certificate and extracts the Common Name (CN)
+/// from the Subject Distinguished Name, which contains the node ID.
+fn extract_peer_node_id(connection: &Connection) -> Option<NodeId> {
+    // Get peer certificates
+    let peer_identity = connection.peer_identity()?;
+
+    // Downcast to Vec<rustls::pki_types::CertificateDer>
+    let peer_certs = peer_identity
+        .downcast_ref::<Vec<rustls::pki_types::CertificateDer>>()?;
+
+    if peer_certs.is_empty() {
+        warn!("No peer certificates provided");
+        return None;
+    }
+
+    // Parse first certificate using x509-parser
+    let cert_der = &peer_certs[0];
+    let (_, cert) = match x509_parser::parse_x509_certificate(cert_der) {
+        Ok(parsed) => parsed,
+        Err(e) => {
+            error!("Failed to parse peer certificate: {}", e);
+            return None;
+        }
+    };
+
+    // Verify certificate validity period
+    let now = std::time::SystemTime::now();
+    let now_secs = now
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs() as i64;
+
+    if now_secs < cert.validity().not_before.timestamp() {
+        error!("Peer certificate not yet valid");
+        return None;
+    }
+
+    if now_secs > cert.validity().not_after.timestamp() {
+        error!("Peer certificate expired");
+        return None;
+    }
+
+    // Extract Common Name from Subject
+    let subject = cert.subject();
+    for rdn in subject.iter() {
+        for attr in rdn.iter() {
+            if attr.attr_type() == &x509_parser::oid_registry::OID_X509_COMMON_NAME {
+                if let Ok(node_id_str) = attr.attr_value().as_str() {
+                    info!("Extracted node ID from certificate CN: {}", node_id_str);
+
+                    // Parse node ID from string (format: "node-X" where X is u64)
+                    if let Some(id_part) = node_id_str.strip_prefix("node-") {
+                        if let Ok(node_id) = id_part.parse::<u64>() {
+                            return Some(NodeId::from(node_id));
+                        }
+                    }
+
+                    // Fallback: try parsing the whole string as u64
+                    if let Ok(node_id) = node_id_str.parse::<u64>() {
+                        return Some(NodeId::from(node_id));
+                    }
+
+                    error!("Could not parse node ID from CN: {}", node_id_str);
+                }
+            }
+        }
+    }
+
+    warn!("Could not find Common Name in peer certificate");
     None
 }
 
@@ -292,6 +356,7 @@ fn extract_session_id(message: &NetworkMessage) -> String {
         NetworkMessage::PresignatureGen(msg) => msg.presig_id.to_string(),
         NetworkMessage::Vote(_) => "votes".to_string(),
         NetworkMessage::Heartbeat(_) => "heartbeats".to_string(),
+        NetworkMessage::Protocol { session_id, .. } => session_id.clone(),
     }
 }
 

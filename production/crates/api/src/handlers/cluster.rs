@@ -1,6 +1,7 @@
 //! Cluster monitoring business logic handlers
 
 use threshold_storage::{EtcdStorage, PostgresStorage};
+use tokio::sync::Mutex;
 use tracing::info;
 
 use crate::{error::ApiError, routes::cluster::NodeInfo};
@@ -16,7 +17,7 @@ pub struct ClusterStatus {
 /// Get overall cluster health status
 pub async fn get_cluster_status(
     _postgres: &PostgresStorage,
-    _etcd: &EtcdStorage,
+    _etcd: &Mutex<EtcdStorage>,
 ) -> Result<ClusterStatus, ApiError> {
     info!("Fetching cluster status");
 

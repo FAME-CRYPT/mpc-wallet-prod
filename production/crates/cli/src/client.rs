@@ -105,6 +105,62 @@ impl ApiClient {
         self.handle_response(response).await
     }
 
+    /// Start DKG ceremony
+    pub async fn start_dkg(
+        &self,
+        protocol: String,
+        threshold: u32,
+        total: u32,
+        participants: Vec<u64>,
+    ) -> Result<DkgResponse> {
+        let url = format!("{}/api/v1/dkg/generate", self.base_url);
+
+        let request = DkgRequest {
+            protocol,
+            threshold,
+            total,
+            participants,
+        };
+
+        let response = self.client.post(&url).json(&request).send().await?;
+
+        self.handle_response(response).await
+    }
+
+    /// Get DKG status
+    pub async fn get_dkg_status(&self) -> Result<DkgStatusResponse> {
+        let url = format!("{}/api/v1/dkg/status", self.base_url);
+        let response = self.client.get(&url).send().await?;
+
+        self.handle_response(response).await
+    }
+
+    /// Start aux_info generation
+    pub async fn start_aux_info(
+        &self,
+        num_parties: u16,
+        participants: Vec<u64>,
+    ) -> Result<AuxInfoResponse> {
+        let url = format!("{}/api/v1/aux-info/generate", self.base_url);
+
+        let request = AuxInfoRequest {
+            num_parties,
+            participants,
+        };
+
+        let response = self.client.post(&url).json(&request).send().await?;
+
+        self.handle_response(response).await
+    }
+
+    /// Get aux_info status
+    pub async fn get_aux_info_status(&self) -> Result<AuxInfoStatusResponse> {
+        let url = format!("{}/api/v1/aux-info/status", self.base_url);
+        let response = self.client.get(&url).send().await?;
+
+        self.handle_response(response).await
+    }
+
     /// Handle API response and parse errors
     async fn handle_response<T: for<'de> Deserialize<'de>>(
         &self,
@@ -224,4 +280,55 @@ pub struct NodeInfo {
 pub struct ListNodesResponse {
     pub nodes: Vec<NodeInfo>,
     pub total: usize,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DkgRequest {
+    pub protocol: String,
+    pub threshold: u32,
+    pub total: u32,
+    pub participants: Vec<u64>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DkgResponse {
+    pub success: bool,
+    pub session_id: String,
+    pub party_index: u16,
+    pub threshold: u32,
+    pub total: u32,
+    pub key_share_size_bytes: usize,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DkgStatusResponse {
+    pub has_key_share: bool,
+    pub latest_session_id: Option<String>,
+    pub key_share_size_bytes: usize,
+    pub total_ceremonies: usize,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct AuxInfoRequest {
+    pub num_parties: u16,
+    pub participants: Vec<u64>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct AuxInfoResponse {
+    pub success: bool,
+    pub session_id: String,
+    pub party_index: u16,
+    pub num_parties: u16,
+    pub aux_info_size_bytes: usize,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct AuxInfoStatusResponse {
+    pub has_aux_info: bool,
+    pub latest_session_id: Option<String>,
+    pub aux_info_size_bytes: usize,
+    pub total_ceremonies: usize,
 }

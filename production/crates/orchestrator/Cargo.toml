@@ -20,8 +20,13 @@ tracing = "0.1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
+# Cryptography
+sha2 = "0.10"
+hex = "0.4"
+
 # Time utilities
 chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1.6", features = ["v4", "serde"] }
 
 # HTTP client for health checks
 reqwest = { version = "0.12", features = ["json"] }
@@ -29,9 +34,21 @@ reqwest = { version = "0.12", features = ["json"] }
 # Internal dependencies
 threshold-storage = { path = "../storage" }
 threshold-consensus = { path = "../consensus" }
+threshold-network = { path = "../network" }
 protocols = { path = "../protocols" }
 threshold-bitcoin = { path = "../bitcoin" }
 threshold-types = { path = "../types" }
+common = { path = "../common" }
+
+# Async channels for message passing
+async-channel = "2.5"
+
+# Protocol dependencies (needed for type references)
+cggmp24-keygen = "0.7.0-alpha.3"
+generic-ec = "0.4.5"
+givre = "0.2.0"
+round-based = "0.3"
+bincode = "1.3"
 
 [dev-dependencies]
 mockall = "0.12"

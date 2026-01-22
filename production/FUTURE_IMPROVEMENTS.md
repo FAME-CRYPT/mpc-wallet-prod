@@ -1,8 +1,51 @@
 # 🚀 MPC Wallet - Future Improvements & Remaining Work
 
-**Date:** 2026-01-21
-**Status:** Comprehensive Implementation Roadmap
-**Target:** Transition from Mock/Dummy to Production-Ready System
+**Date:** 2026-01-22
+**Version:** 2.0
+**Status:** Complete Implementation Roadmap
+**Target:** Transition from Mock/Dummy to Production-Ready Bitcoin MPC Wallet
+
+---
+
+## 📑 Table of Contents
+
+### Core Documentation
+- [📋 Executive Summary](#-executive-summary)
+- [🎯 Protocol Architecture Clarification](#-protocol-architecture-clarification)
+- [📊 Protocol Comparison Table](#-protocol-comparison-table)
+
+### Implementation Plan (Priority Order)
+- [🔧 PRIORITY 0: Distributed Key Generation (DKG)](#priority-0-distributed-key-generation-dkg---critical) - **CRITICAL** (3-4 days)
+  - CGGMP24 DKG Integration
+  - FROST DKG Integration (Givre)
+- [🔧 PRIORITY 1: Presignature Pool Management](#priority-1-presignature-pool-management---critical) - **CRITICAL** (3-4 days)
+- [🔧 PRIORITY 2: CGGMP24 Signing Integration](#priority-2-cggmp24-signing-integration-remove-mock---critical) - **CRITICAL** (4-5 days)
+- [🔧 PRIORITY 2.5: Intelligent Protocol Selection](#priority-25-intelligent-protocol-selection--multi-protocol-support---critical) - **CRITICAL** (2-3 days)
+- [🔧 PRIORITY 3: FROST Signing Integration](#priority-3-frost-signing-integration---high) - HIGH (3-4 days)
+- [🔧 PRIORITY 4: QUIC Vote Broadcasting](#priority-4-quic-vote-broadcasting---medium) - MEDIUM (2-3 days)
+- [🔧 PRIORITY 5: Signature Verification](#priority-5-signature-verification---medium) - MEDIUM (1-2 days)
+- [🔧 PRIORITY 6: mTLS Certificate Validation](#priority-6-mtls-certificate-validation---low) - LOW (1 day)
+
+### Project Management
+- [📦 Source Code Mapping](#-source-code-mapping)
+- [🗺️ Implementation Roadmap (Timeline)](#️-implementation-roadmap-timeline)
+- [📊 Work Estimate Summary](#-work-estimate-summary)
+- [🎯 Minimum Viable Product (MVP) Definition](#-minimum-viable-product-mvp-definition)
+- [🚨 Critical Dependencies](#-critical-dependencies)
+- [📝 Files Summary](#-files-summary)
+- [✅ What's Already Done](#-whats-already-done-dont-redo)
+
+### Reference & Support
+- [🔧 Cargo Dependencies Reference](#-cargo-dependencies-reference)
+- [🐛 Troubleshooting Guide](#-troubleshooting-guide)
+- [📚 API Examples](#-api-examples)
+  - Complete DKG Flow (CGGMP24)
+  - Complete FROST DKG Flow (Givre)
+  - FROST Signing with Givre
+- [🎓 Learning Resources](#-learning-resources)
+- [🔍 Testing Strategy](#-testing-strategy)
+- [📞 Support & Questions](#-support--questions)
+- [🎯 Quick Start Checklist](#-quick-start-checklist)
 
 ---
 
@@ -27,6 +70,29 @@ This document provides a **complete roadmap** for implementing all missing/place
 - **Mock signatures** (not real Bitcoin signatures)
 - **No QUIC vote broadcasting** (manual SQL insertion only)
 
+### 📚 Cryptography Libraries Used
+
+| Protocol | Library | Version | Repository | Purpose | Source Code |
+|----------|---------|---------|------------|---------|-------------|
+| **CGGMP24** (ECDSA) | `cggmp24` | 0.7.0-alpha.3 | [ZenGo-X/cggmp24](https://github.com/ZenGo-X/cggmp24) | SegWit Bitcoin signing | `threshold-signing (Copy)/` |
+| **FROST** (Schnorr) | `givre` | 0.2 | [LFDT-Lockness/givre](https://github.com/LFDT-Lockness/givre) | Taproot Bitcoin signing | `torcus-wallet/` |
+
+**⚠️ IMPORTANT - DO NOT MIX LIBRARIES:**
+- **CGGMP24 (SegWit)**: Use `cggmp24` library from `threshold-signing (Copy)` folder
+  - DKG: `cggmp24::keygen`
+  - Signing: `cggmp24::signing` + `cggmp24::signing_fast`
+  - Presignatures: `cggmp24::presignature`
+
+- **FROST (Taproot)**: Use `givre` library from `torcus-wallet` folder
+  - DKG: `givre::keygen` (FROST-native, NOT CGGMP21)
+  - Signing: `givre::signing`
+  - No presignatures (not needed - faster protocol)
+
+**Givre Features (FROST only):**
+- `full-signing`: Complete FROST DKG + signing protocol
+- `serde`: Network serialization
+- `ciphersuite-bitcoin`: Bitcoin secp256k1 curve support
+
 ---
 
 ## 🎯 Protocol Architecture Clarification
@@ -40,34 +106,57 @@ This document provides a **complete roadmap** for implementing all missing/place
 - **Signature Type:** ECDSA (Elliptic Curve Digital Signature Algorithm)
 - **Curve:** secp256k1 (Bitcoin standard)
 - **Library:** `cggmp24` crate (version 0.7.0-alpha.3)
+- **Repository:** https://github.com/ZenGo-X/cggmp24
 - **Output:** 64-byte ECDSA signature `(r, s)`
 
-**Location in torcus-wallet:** ❌ NOT FOUND (torcus-wallet doesn't have CGGMP24)
-**Location in threshold-signing (Copy):** ✅ FULL IMPLEMENTATION
+**Source Location:** ✅ `threshold-signing (Copy)/node/src/` folder
+**Already Copied To:** ✅ `production/crates/protocols/src/cggmp24/`
+
 ```
-threshold-signing (Copy)/node/src/
-├── keygen.rs              - CGGMP24 distributed key generation
-├── presignature.rs        - CGGMP24 presignature generation
-├── presignature_pool.rs   - Pool management (target: 100, max: 150)
-├── signing.rs             - Full CGGMP24 signing protocol (~2-3 seconds)
-└── signing_fast.rs        - Fast signing with presignatures (~500ms)
+threshold-signing (Copy)/node/src/    →    production/crates/protocols/src/cggmp24/
+├── keygen.rs                          →    ├── keygen.rs              ✅ COPIED
+├── presignature.rs                    →    ├── presignature.rs        ✅ COPIED
+├── presignature_pool.rs               →    ├── presig_pool.rs         ✅ COPIED
+├── signing.rs                         →    ├── signing.rs             ✅ COPIED
+└── signing_fast.rs                    →    └── signing_fast.rs        ✅ COPIED
 ```
+
+**Integration Status:** ❌ Kod kopyalandı ama orchestrator'a entegre EDİLMEDİ (Priority 0-2'de yapılacak)
 
 #### 2. **FROST** = Schnorr Threshold Signing
 - **Use Case:** Taproot Bitcoin addresses (P2TR) - BIP-340 compliant
 - **Signature Type:** Schnorr signatures
 - **Curve:** secp256k1 (Bitcoin standard)
 - **Library:** `givre` crate (version 0.2)
+  - **Repository:** https://github.com/LFDT-Lockness/givre
+  - **Maintainer:** LFDT-Lockness (Lattice-Based Fully Distributed Threshold)
+  - **Features Used:**
+    - `full-signing`: Complete FROST DKG + signing protocol
+    - `serde`: Serialization support for network transmission
+    - `ciphersuite-bitcoin`: Bitcoin secp256k1 curve support
 - **Output:** 64-byte Schnorr signature `(R || s)`
+- **BIP Compliance:** BIP-340 (Taproot Schnorr signatures)
 
-**Location in torcus-wallet:** ✅ FULL IMPLEMENTATION
+**Why Givre?**
+- Production-ready FROST implementation by LFDT team
+- Built-in FROST-native DKG (not CGGMP-based)
+- Bitcoin-specific ciphersuite for secp256k1
+- Full serialization support for distributed operations
+- Well-maintained and actively developed
+- Simpler and faster than CGGMP24 (2-3 rounds vs 5-6)
+
+**Source Location:** ✅ `torcus-wallet/crates/protocols/src/frost/` folder
+**Already Copied To:** ✅ `production/crates/protocols/src/frost/`
+
 ```
-torcus-wallet/crates/protocols/src/frost/
-├── keygen.rs              - FROST distributed key generation (Givre)
-└── signing.rs             - FROST signing protocol (BIP-340 compliant)
+torcus-wallet/crates/protocols/src/frost/    →    production/crates/protocols/src/frost/
+├── keygen.rs                                 →    ├── keygen.rs              ✅ COPIED
+└── signing.rs                                →    └── signing.rs             ✅ COPIED
 ```
 
-**Location in threshold-signing (Copy):** ❌ NOT FOUND (only CGGMP24)
+**Integration Status:** ❌ Kod kopyalandı ama orchestrator'a entegre EDİLMEDİ (Priority 0 & 3'te yapılacak)
+
+**IMPORTANT:** FROST için Givre kullanıyoruz, CGGMP24 için `cggmp24` kütüphanesi kullanıyoruz. KARIŞMASALAR!
 
 ### IMPORTANT: Schnorr ≠ Separate Protocol
 
@@ -89,7 +178,7 @@ So we have **2 protocols (FROST + CGGMP24)**, not 3.
 | **Signing Speed (with pool)** | <500ms | ~800ms (no pool yet) |
 | **Signing Speed (full)** | ~2-3 seconds | ~800ms (simpler protocol) |
 | **Setup Complexity** | High (aux info needed) | Medium (simpler DKG) |
-| **Library** | `cggmp24` v0.7.0-alpha.3 | `givre` v0.2 |
+| **Library** | `cggmp24` v0.7.0-alpha.3 | `givre` v0.2 ([GitHub](https://github.com/LFDT-Lockness/givre)) |
 | **Source Code Location** | `threshold-signing (Copy)` | `torcus-wallet` |
 | **Production Crate Status** | ✅ Code copied to `production/crates/protocols/src/cggmp24/` | ✅ Code copied to `production/crates/protocols/src/frost/` |
 | **Integration Status** | ❌ Not integrated (mock signatures used) | ❌ Not integrated |
@@ -208,23 +297,78 @@ Without DKG, there are **NO key shares** to sign with. Currently, no keys exist 
 
 **Source Code:** `torcus-wallet/crates/protocols/src/frost/keygen.rs`
 **Target:** `production/crates/orchestrator/src/dkg_service.rs` (same file, different method)
+**Library:** `givre` v0.2 (https://github.com/LFDT-Lockness/givre)
+
+**IMPORTANT:** Givre is **ONLY for FROST** (Schnorr/Taproot). CGGMP24 (ECDSA/SegWit) uses the separate `cggmp24` library.
 
 **Implementation:**
-- Similar structure to CGGMP24 DKG
-- Use `givre::keygen` instead of `cggmp24::keygen`
-- Simpler protocol (3 rounds instead of 5-6)
-- Faster completion (~500ms vs ~8s for CGGMP24)
+- Use `givre::keygen` module for FROST distributed key generation
+- **Different from CGGMP24:** FROST uses its own DKG protocol (not CGGMP21)
+- Simpler protocol: 2-3 rounds (vs 5-6 rounds for CGGMP24)
+- Faster completion: ~500ms (vs ~8s for CGGMP24)
+- Produces BIP-340 compliant Schnorr keys for Taproot
+
+**Givre Features Configuration:**
+```toml
+# production/Cargo.toml
+givre = {
+    version = "0.2",
+    features = [
+        "full-signing",          # Complete FROST signing implementation (includes DKG)
+        "serde",                 # Network serialization support
+        "ciphersuite-bitcoin"    # Bitcoin secp256k1 curve
+    ]
+}
+```
+
+**Note:** We do NOT use `cggmp21-keygen` feature. Givre has its own FROST-native DKG.
 
 **Integration:**
 ```rust
+use givre::ciphersuite::Secp256k1;
+use givre::keygen::{KeygenRound1, KeygenRound2};
+
 impl DkgService {
     pub async fn run_frost_dkg(&self, participants: Vec<NodeId>) -> Result<DkgResult> {
-        // Use givre library for FROST keygen
-        // Produces Schnorr-compatible key shares
-        // Store x-only public key (32 bytes) for Taproot
+        // 1. Use givre library for FROST-native DKG
+        // 2. Produces Schnorr-compatible key shares
+        // 3. Store x-only public key (32 bytes) for Taproot (BIP-340)
+        // 4. Key shares are compatible with givre::signing module
+
+        // Round 1: Generate and broadcast commitments
+        let (round1_secret, round1_broadcast) = givre::keygen::round1::<Secp256k1>(
+            self.party_index,
+            self.threshold,
+            participants.len() as u16,
+        )?;
+
+        self.broadcast_frost_message(round1_broadcast).await?;
+
+        // Round 2: Collect commitments and generate key share
+        let round1_messages = self.collect_frost_round1().await?;
+        let key_share = givre::keygen::round2(
+            round1_secret,
+            round1_messages,
+        )?;
+
+        // Extract BIP-340 compatible x-only public key for Taproot
+        let x_only_pubkey = key_share.public_key().x_only();
+
+        Ok(DkgResult {
+            public_key: x_only_pubkey.serialize(),
+            protocol: ProtocolType::FROST,
+        })
     }
 }
 ```
+
+**Why Givre for FROST?**
+- **Single Library Solution:** Same library handles both DKG and signing
+- **FROST-Native DKG:** Built-in FROST DKG (not adapted from CGGMP)
+- **Bitcoin Native:** Built-in Bitcoin secp256k1 support via `ciphersuite-bitcoin`
+- **BIP-340 Compliant:** Produces x-only public keys for Taproot
+- **Network Ready:** Full `serde` support for distributed message passing
+- **Faster & Simpler:** 2-3 rounds vs 5-6 rounds for CGGMP24
 
 #### Testing DKG
 
@@ -1339,12 +1483,62 @@ For **Taproot support** (modern Bitcoin). Not critical for MVP (can use SegWit o
 
 **Source Code:** `torcus-wallet/crates/protocols/src/frost/signing.rs`
 **Target:** `production/crates/orchestrator/src/signing_coordinator.rs` (NEW)
+**Library:** `givre` v0.2 (https://github.com/LFDT-Lockness/givre)
 
 **Implementation:**
 - Similar to CGGMP24 signing integration
-- Use `givre::signing` instead of `cggmp24::signing`
-- No presignature pool yet (future enhancement)
-- Produces BIP-340 compliant Schnorr signatures
+- Use `givre::signing` module for FROST signing
+- **Key Feature:** Uses same key shares from `givre::keygen` (from Priority 0)
+- No presignature pool yet (FROST doesn't require presigs - simpler protocol)
+- Produces BIP-340 compliant Schnorr signatures for Taproot
+- **Faster than CGGMP24:** ~800ms signing time (no presig pool needed)
+
+**Givre FROST Signing Flow:**
+```rust
+use givre::signing::{SigningParty, SigningRound};
+use givre::ciphersuite::Secp256k1;
+
+impl SigningCoordinator {
+    pub async fn sign_with_frost(
+        &self,
+        message: &[u8],
+        key_share: &KeyShare<Secp256k1>,
+    ) -> Result<SchnorrSignature> {
+        // 1. Initialize FROST signing round (2 rounds total)
+        let mut party = SigningParty::new(
+            key_share.clone(),
+            self.threshold,
+            self.party_index,
+        )?;
+
+        // 2. Round 1: Generate commitment (nonce commitment)
+        let round1_msg = party.create_round1_message()?;
+        self.broadcast_message(round1_msg).await?;
+
+        // 3. Collect commitments from other parties
+        let commitments = self.collect_round1_messages().await?;
+
+        // 4. Round 2: Generate signature share
+        let round2_msg = party.create_round2_message(message, &commitments)?;
+        self.broadcast_message(round2_msg).await?;
+
+        // 5. Collect signature shares and aggregate
+        let sig_shares = self.collect_round2_messages().await?;
+        let signature = party.aggregate_signatures(&sig_shares)?;
+
+        // 6. Verify BIP-340 compliance
+        assert!(signature.verify_bip340(message, &key_share.public_key()));
+
+        Ok(signature)
+    }
+}
+```
+
+**Why Givre for FROST Signing?**
+- **Integrated Solution:** Uses same key shares from givre DKG (Priority 0)
+- **Fast:** Only 2 rounds (~800ms), no presignature pool needed
+- **BIP-340 Native:** Built-in Taproot/Schnorr support
+- **Simpler than CGGMP24:** No auxiliary info or presignatures required
 
 **API Route Selection:**
 ```rust
@@ -1804,8 +1998,12 @@ The following components are **COMPLETE** and working:
 
 ### FROST Protocol
 - Paper: "FROST: Flexible Round-Optimized Schnorr Threshold Signatures" (2020)
-- Library: https://github.com/ZcashFoundation/frost
-- Givre: https://github.com/dfns/givre (used in torcus-wallet)
+- **Givre Library (USED IN THIS PROJECT):** https://github.com/LFDT-Lockness/givre
+  - **Maintainer:** LFDT-Lockness (Lattice-Based Fully Distributed Threshold)
+  - **Version:** 0.2
+  - **Features:** CGGMP21 DKG + FROST signing + Bitcoin secp256k1 support
+  - **Docs:** https://docs.rs/givre/latest/givre/
+- Alternative Library: https://github.com/ZcashFoundation/frost (Zcash implementation, not used here)
 
 ### Bitcoin Cryptography
 - BIP-340 (Schnorr): https://github.com/bitcoin/bips/blob/master/bip-0340.mediawiki
@@ -1846,9 +2044,545 @@ If you have questions during implementation:
 
 ---
 
-**Document Version:** 1.0
-**Last Updated:** 2026-01-21
-**Status:** Ready for Implementation
+---
+
+## 🔧 Cargo Dependencies Reference
+
+### Required Dependencies (Already in Cargo.toml)
+
+```toml
+[workspace.dependencies]
+# Threshold cryptography - CGGMP24 for ECDSA (SegWit)
+# Source: threshold-signing (Copy)/node/src/
+cggmp24 = { version = "0.7.0-alpha.3" }
+
+# Threshold cryptography - FROST for Schnorr (Taproot)
+# Source: torcus-wallet/crates/protocols/src/frost/
+# ONLY for FROST - DO NOT use for CGGMP24!
+givre = {
+    version = "0.2",
+    features = [
+        "full-signing",        # Complete FROST DKG + signing
+        "serde",               # Serialization for network
+        "ciphersuite-bitcoin"  # Bitcoin secp256k1 curve
+    ]
+}
+
+# Bitcoin primitives
+bitcoin = { version = "0.31", features = ["serde", "rand"] }
+
+# Networking
+quinn = "0.10"                 # QUIC implementation
+rustls = { version = "0.21", features = ["dangerous_configuration"] }
+rcgen = "0.11"                 # Certificate generation
+
+# Storage
+tokio-postgres = "0.7"
+etcd-client = "0.12"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+bincode = "1.3"
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# Error handling
+anyhow = "1.0"
+thiserror = "1.0"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+```
+
+---
+
+## 🐛 Troubleshooting Guide
+
+### Common Issues During Implementation
+
+#### 1. DKG Fails to Complete
+
+**Symptom:** DKG ceremony hangs or times out
+
+**Possible Causes:**
+- Network connectivity issues between nodes
+- Insufficient threshold (need at least `threshold` nodes online)
+- etcd lock contention
+
+**Solution:**
+```bash
+# Check all nodes are reachable
+mpc-wallet-cli cluster status
+
+# Verify etcd connectivity
+etcdctl get /cluster/nodes --prefix
+
+# Check DKG logs
+docker logs node-1 | grep -i "dkg"
+
+# Release stuck locks
+etcdctl del /locks/dkg
+```
+
+#### 2. Presignature Pool Empty
+
+**Symptom:** Signing fails with "PresignaturePoolEmpty" error
+
+**Possible Causes:**
+- Background generation service not started
+- Generation rate slower than consumption
+- DKG not completed (no key shares)
+
+**Solution:**
+```bash
+# Check pool status
+mpc-wallet-cli presig status
+
+# Manually generate presignatures
+mpc-wallet-cli presig generate --count 50
+
+# Verify key shares exist
+psql -c "SELECT * FROM key_shares LIMIT 5;"
+
+# Check presig generation logs
+docker logs node-1 | grep -i "presignature"
+```
+
+#### 3. Signature Verification Fails
+
+**Symptom:** Bitcoin node rejects transaction with "bad-txns-in-belowout" or "mandatory-script-verify-flag-failed"
+
+**Possible Causes:**
+- Using wrong protocol for address type (ECDSA for Taproot or vice versa)
+- Signature shares combined incorrectly
+- Transaction malformed
+
+**Solution:**
+```bash
+# Verify protocol selection
+curl http://localhost:3001/api/v1/transactions/{txid} | jq '.protocol'
+
+# Test signature locally before broadcast
+bitcoin-cli testmempoolaccept '["<signed_tx_hex>"]'
+
+# Check if address type matches protocol
+# Taproot (bc1p...) = FROST/Schnorr
+# SegWit (bc1q...) = CGGMP24/ECDSA
+```
+
+#### 4. QUIC Connection Failures
+
+**Symptom:** Nodes cannot communicate, "connection refused" errors
+
+**Possible Causes:**
+- mTLS certificate mismatch
+- Port not exposed in Docker
+- Firewall blocking UDP traffic (QUIC uses UDP)
+
+**Solution:**
+```bash
+# Verify QUIC ports are open
+docker ps | grep "50051-50055"
+
+# Check certificate validity
+openssl x509 -in certs/node-1.crt -text -noout
+
+# Test QUIC connectivity
+nc -u -v node-2 50052
+
+# Check QUIC logs
+docker logs node-1 | grep -i "quic\|connection"
+```
+
+#### 5. Givre Library Errors
+
+**Symptom:** "unsupported curve" or "invalid ciphersuite" errors
+
+**Possible Causes:**
+- Missing `ciphersuite-bitcoin` feature flag
+- Using wrong curve (not secp256k1)
+- Incompatible givre version
+
+**Solution:**
+```toml
+# Verify Cargo.toml has correct features
+givre = {
+    version = "0.2",
+    features = ["cggmp21-keygen", "full-signing", "serde", "ciphersuite-bitcoin"]
+}
+```
+
+```rust
+// Ensure using Bitcoin ciphersuite
+use givre::ciphersuite::Secp256k1;
+
+// NOT this:
+// use givre::ciphersuite::Secp256r1; // Wrong curve!
+```
+
+#### 6. Database Schema Errors
+
+**Symptom:** "relation does not exist" or "column not found"
+
+**Possible Causes:**
+- Database migrations not applied
+- Schema out of sync with code
+
+**Solution:**
+```bash
+# Re-initialize database
+docker-compose down -v
+docker-compose up -d postgres
+
+# Verify tables exist
+psql -c "\dt"
+
+# Check specific table
+psql -c "\d dkg_ceremonies"
+```
+
+---
+
+## 📚 API Examples
+
+### Complete DKG Flow (CGGMP24)
+
+```rust
+use cggmp24::{
+    key_share::{DirtyKeyShare, PartyAux},
+    supported_curves::Secp256k1,
+    security_level::SecurityLevel128,
+};
+
+// Round 1: Key generation setup
+let eid = cggmp24::ExecutionId::new(b"dkg-session-001");
+let i = PartyIndex::from_usize(0); // Party 0
+let n = NumberOfParties::from_usize(5);
+let t = Threshold::from_usize(4);
+
+let mut party = cggmp24::keygen::KeygenParty::<Secp256k1, SecurityLevel128>::new(
+    i, n, t, eid
+)?;
+
+// Round 1: Broadcast commitment
+let round1_msg = party.round1()?;
+broadcast_to_all(round1_msg).await?;
+
+// Round 2: Receive commitments, send shares
+let commitments = collect_messages().await?;
+let round2_msg = party.round2(&commitments)?;
+broadcast_to_all(round2_msg).await?;
+
+// Rounds 3-5: Continue DKG protocol...
+// (Full implementation in production/crates/protocols/src/cggmp24/keygen.rs)
+
+// Final: Extract key share
+let key_share: DirtyKeyShare<Secp256k1, SecurityLevel128> = party.finalize()?;
+let public_key = key_share.shared_public_key();
+```
+
+### Complete FROST DKG Flow (Givre)
+
+**IMPORTANT:** This is **ONLY for FROST** (Taproot/Schnorr). For CGGMP24 (SegWit/ECDSA), use the `cggmp24` library instead!
+
+```rust
+use givre::{
+    ciphersuite::Secp256k1,
+    key_share::KeyShare,
+};
+
+// Initialize FROST-native DKG
+// Source: torcus-wallet/crates/protocols/src/frost/keygen.rs
+let party_index = 1u16;
+let threshold = 4u16;
+let total_parties = 5u16;
+
+// Round 1: Generate and broadcast commitments
+let (round1_secret, round1_msg) = givre::keygen::round1::<Secp256k1>(
+    party_index,
+    threshold,
+    total_parties,
+)?;
+
+broadcast_message(round1_msg).await?;
+
+// Round 2: Collect commitments and generate shares
+let round1_messages = collect_messages().await?;
+let (key_share, round2_msg) = givre::keygen::round2::<Secp256k1>(
+    round1_secret,
+    round1_messages,
+)?;
+
+broadcast_message(round2_msg).await?;
+
+// Round 3: Finalize key share
+let round2_messages = collect_messages().await?;
+let final_key_share: KeyShare<Secp256k1> = givre::keygen::finalize(
+    key_share,
+    round2_messages,
+)?;
+
+// Extract BIP-340 x-only public key for Taproot
+let x_only_pubkey = final_key_share.public_key().x_only();
+let taproot_address = create_taproot_address(x_only_pubkey)?;
+```
+
+**Key Points:**
+- This is **FROST-native DKG**, not CGGMP21-based
+- Used **ONLY** for Taproot (bc1p...) addresses
+- For SegWit (bc1q...), use `cggmp24` library DKG instead
+
+### FROST Signing with Givre
+
+```rust
+use givre::signing::{SigningParty, SigningRound};
+
+// Prepare message (Bitcoin transaction hash)
+let message: [u8; 32] = tx_hash.to_byte_array();
+
+// Round 1: Generate nonce commitments
+let mut party = SigningParty::<Secp256k1>::new(
+    key_share.clone(),
+    party_index,
+    threshold,
+)?;
+
+let round1_msg = party.round1(&message)?;
+broadcast_message(round1_msg).await?;
+
+// Round 2: Generate signature share
+let round1_messages = collect_messages().await?;
+let round2_msg = party.round2(round1_messages)?;
+broadcast_message(round2_msg).await?;
+
+// Aggregate: Combine signature shares
+let round2_messages = collect_messages().await?;
+let signature = party.aggregate(round2_messages)?;
+
+// Verify BIP-340 Schnorr signature
+assert!(signature.verify_bip340(&message, &key_share.public_key()));
+```
+
+---
+
+## 🎯 Quick Start Checklist
+
+### ⚠️ CRITICAL: Library Usage Rules
+
+**DO NOT MIX LIBRARIES!**
+- ✅ **CGGMP24 (SegWit)**: Use `cggmp24` library → Source: `threshold-signing (Copy)/`
+- ✅ **FROST (Taproot)**: Use `givre` library → Source: `torcus-wallet/`
+- ❌ **DO NOT** use Givre for CGGMP24
+- ❌ **DO NOT** use cggmp24 for FROST
+
+### Pre-Implementation Checklist
+
+Before starting implementation, ensure:
+
+- [ ] **Library Understanding:**
+  - [ ] Understand `cggmp24` is for SegWit (ECDSA)
+  - [ ] Understand `givre` is for Taproot (Schnorr)
+  - [ ] Never mix the two libraries
+- [ ] All dependencies installed in `Cargo.toml`
+- [ ] Docker environment running (5 nodes + etcd + PostgreSQL)
+- [ ] Database schema initialized (`01_schema.sql` applied)
+- [ ] QUIC+mTLS certificates generated
+- [ ] Network connectivity between nodes verified
+- [ ] Source code copied from `torcus-wallet` and `threshold-signing (Copy)`
+- [ ] Read Protocol documentation:
+  - [ ] CGGMP24 paper
+  - [ ] FROST paper
+  - [ ] Givre library docs: https://github.com/LFDT-Lockness/givre
+  - [ ] BIP-340 (Schnorr)
+  - [ ] BIP-341 (Taproot)
+
+---
+
+---
+
+## 🚀 Next Steps: Where to Start
+
+### Day 1 Morning: Setup & Planning (2 hours)
+
+1. **Read Documentation** (1 hour)
+   - [ ] Read CGGMP24 paper introduction
+   - [ ] Read Givre library README: https://github.com/LFDT-Lockness/givre
+   - [ ] Skim BIP-340 (Schnorr): https://github.com/bitcoin/bips/blob/master/bip-0340.mediawiki
+
+2. **Verify Environment** (30 minutes)
+   ```bash
+   cd production
+   docker-compose up -d
+   docker ps  # Should show 5 nodes + etcd + postgres
+   cargo build  # Verify all dependencies compile
+   ```
+
+3. **Review Existing Code** (30 minutes)
+   - [ ] Read: [production/crates/protocols/src/cggmp24/keygen.rs](production/crates/protocols/src/cggmp24/keygen.rs)
+   - [ ] Read: [production/crates/protocols/src/frost/keygen.rs](production/crates/protocols/src/frost/keygen.rs)
+   - [ ] Read: [production/crates/orchestrator/src/service.rs](production/crates/orchestrator/src/service.rs) (lines 388-533, mock signing)
+
+### Day 1 Afternoon: Start DKG Implementation (4-6 hours)
+
+**FIRST FILE TO CREATE:** `production/crates/orchestrator/src/dkg_service.rs`
+
+```bash
+# Create the file
+touch production/crates/orchestrator/src/dkg_service.rs
+```
+
+**Start with this template:**
+
+```rust
+// production/crates/orchestrator/src/dkg_service.rs
+
+use std::sync::Arc;
+use threshold_storage::{EtcdStorage, PostgresStorage};
+use threshold_network::QuicEngine;
+use threshold_types::{NodeId, ProtocolType, Result};
+
+/// Service for coordinating Distributed Key Generation across MPC nodes
+pub struct DkgService {
+    postgres: Arc<PostgresStorage>,
+    etcd: Arc<EtcdStorage>,
+    quic: Arc<QuicEngine>,
+    node_id: NodeId,
+}
+
+impl DkgService {
+    pub fn new(
+        postgres: Arc<PostgresStorage>,
+        etcd: Arc<EtcdStorage>,
+        quic: Arc<QuicEngine>,
+        node_id: NodeId,
+    ) -> Self {
+        Self {
+            postgres,
+            etcd,
+            quic,
+            node_id,
+        }
+    }
+
+    /// Run CGGMP24 DKG for ECDSA key generation (SegWit addresses)
+    /// Uses cggmp24 library from threshold-signing (Copy) folder
+    pub async fn run_cggmp24_dkg(
+        &self,
+        threshold: u16,
+        total_parties: u16,
+    ) -> Result<DkgResult> {
+        // TODO: Implement CGGMP24 DKG
+        // Source: threshold-signing (Copy)/node/src/keygen.rs
+        // Already copied to: production/crates/protocols/src/cggmp24/keygen.rs
+        // Library: cggmp24 v0.7.0-alpha.3
+        todo!("Day 1-2: Implement CGGMP24 DKG coordination")
+    }
+
+    /// Run FROST DKG using Givre for Schnorr key generation (Taproot addresses)
+    /// Uses givre library from torcus-wallet folder
+    /// IMPORTANT: This is FROST-native DKG, NOT CGGMP21!
+    pub async fn run_frost_dkg(
+        &self,
+        threshold: u16,
+        total_parties: u16,
+    ) -> Result<DkgResult> {
+        // TODO: Implement FROST DKG using Givre
+        // Source: torcus-wallet/crates/protocols/src/frost/keygen.rs
+        // Already copied to: production/crates/protocols/src/frost/keygen.rs
+        // Library: givre v0.2
+        // Reference: https://github.com/LFDT-Lockness/givre
+        todo!("Day 3: Implement FROST DKG using Givre")
+    }
+}
+
+pub struct DkgResult {
+    pub public_key: Vec<u8>,
+    pub protocol: ProtocolType,
+}
+```
+
+**Then modify:** `production/crates/orchestrator/src/lib.rs`
+
+```rust
+// Add this line
+pub mod dkg_service;
+
+// Re-export
+pub use dkg_service::{DkgService, DkgResult};
+```
+
+### Day 1-2: Complete CGGMP24 DKG (Detailed Steps)
+
+Follow this exact sequence:
+
+1. **Create QUIC message types** (2 hours)
+   - File: [production/crates/types/src/messages.rs](production/crates/types/src/messages.rs)
+   - Add: `DkgMessage` enum with all DKG rounds
+
+2. **Implement DKG coordination** (4 hours)
+   - File: [production/crates/orchestrator/src/dkg_service.rs](production/crates/orchestrator/src/dkg_service.rs)
+   - Copy logic from: `threshold-signing (Copy)/node/src/keygen.rs`
+   - Adapt to work with QUIC messaging
+
+3. **Create API endpoints** (2 hours)
+   - File: [production/crates/api/src/handlers/dkg.rs](production/crates/api/src/handlers/dkg.rs) (NEW)
+   - File: [production/crates/api/src/routes/dkg.rs](production/crates/api/src/routes/dkg.rs) (NEW)
+
+4. **Add database schema** (1 hour)
+   - File: [production/docker/init-db/01_schema.sql](production/docker/init-db/01_schema.sql)
+   - Add: `dkg_ceremonies`, `key_shares` tables
+
+5. **Test DKG** (2 hours)
+   - Create E2E test in `production/e2e/dkg_test.rs`
+   - Run: `cargo test --test dkg_test`
+
+### Reference Files (Keep Open While Coding)
+
+Always have these files open in separate tabs:
+
+1. **Source Code Reference:**
+   - [threshold-signing (Copy)/node/src/keygen.rs](threshold-signing (Copy)/node/src/keygen.rs) - CGGMP24 DKG reference
+   - [torcus-wallet/crates/protocols/src/frost/keygen.rs](torcus-wallet/crates/protocols/src/frost/keygen.rs) - FROST DKG reference
+
+2. **Existing Infrastructure:**
+   - [production/crates/orchestrator/src/service.rs](production/crates/orchestrator/src/service.rs) - Orchestration patterns
+   - [production/crates/network/src/quic_engine.rs](production/crates/network/src/quic_engine.rs) - QUIC messaging
+
+3. **Type Definitions:**
+   - [production/crates/types/src/lib.rs](production/crates/types/src/lib.rs) - Shared types
+   - [production/crates/types/src/messages.rs](production/crates/types/src/messages.rs) - Protocol messages
+
+### Daily Progress Tracking
+
+**Day 1:**
+- [ ] Environment verified
+- [ ] DkgService file created
+- [ ] CGGMP24 DKG message types added
+- [ ] DKG coordination logic started
+
+**Day 2:**
+- [ ] CGGMP24 DKG coordination completed
+- [ ] API endpoints created
+- [ ] Database schema updated
+- [ ] Basic DKG test passing
+
+**Day 3:**
+- [ ] FROST DKG (Givre) integration
+- [ ] Both protocols tested end-to-end
+- [ ] Documentation updated
+
+**Day 4:**
+- [ ] DKG refinement and error handling
+- [ ] Start Presignature Pool (Priority 1)
+
+---
+
+**Document Version:** 2.0
+**Last Updated:** 2026-01-22
+**Status:** Complete - Ready for Implementation
 **Estimated Total Effort:** 10-25 days (depending on parallelization)
 
-**NEXT STEP:** Start with P0 - DKG Implementation (Critical blocker for everything else)
+**🎯 IMMEDIATE ACTION:** Create [production/crates/orchestrator/src/dkg_service.rs](production/crates/orchestrator/src/dkg_service.rs) and start with CGGMP24 DKG implementation

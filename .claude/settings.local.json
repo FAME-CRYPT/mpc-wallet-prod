@@ -101,7 +101,8 @@
       "Bash(rustc:*)",
       "Bash(winpty docker exec -it mpc-node-1 /app/mpc-wallet-server --help)",
       "Bash(TXID=\"71a90fed16f6db8bef15d59b096826703a0ef2782d9e5e6d2fde0708fd4a91fd\")",
-      "Bash(TXID=\"e81b201b8810c0bfcb1c0dd6e2845c4001eff520955637e7b895dd663f1afe96\")"
+      "Bash(TXID=\"e81b201b8810c0bfcb1c0dd6e2845c4001eff520955637e7b895dd663f1afe96\")",
+      "Bash(Select-Object -First 100)"
     ]
   }
 }

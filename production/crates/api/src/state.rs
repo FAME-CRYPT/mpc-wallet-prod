@@ -1,7 +1,9 @@
 //! Shared application state for the API server
 
 use std::sync::Arc;
+use tokio::sync::Mutex;
 use threshold_bitcoin::BitcoinClient;
+use threshold_orchestrator::{DkgService, AuxInfoService};
 use threshold_storage::{EtcdStorage, PostgresStorage};
 
 /// Shared application state passed to all handlers
@@ -9,10 +11,14 @@ use threshold_storage::{EtcdStorage, PostgresStorage};
 pub struct AppState {
     /// PostgreSQL storage for transaction and node data
     pub postgres: Arc<PostgresStorage>,
-    /// etcd storage for distributed state
-    pub etcd: Arc<EtcdStorage>,
+    /// etcd storage for distributed state (with interior mutability)
+    pub etcd: Arc<Mutex<EtcdStorage>>,
     /// Bitcoin client for blockchain operations
     pub bitcoin: Arc<BitcoinClient>,
+    /// DKG service for distributed key generation
+    pub dkg_service: Arc<DkgService>,
+    /// Aux info service for auxiliary information generation
+    pub aux_info_service: Arc<AuxInfoService>,
 }
 
 impl AppState {
@@ -21,11 +27,15 @@ impl AppState {
         postgres: PostgresStorage,
         etcd: EtcdStorage,
         bitcoin: BitcoinClient,
+        dkg_service: DkgService,
+        aux_info_service: AuxInfoService,
     ) -> Self {
         Self {
             postgres: Arc::new(postgres),
-            etcd: Arc::new(etcd),
+            etcd: Arc::new(Mutex::new(etcd)),
             bitcoin: Arc::new(bitcoin),
+            dkg_service: Arc::new(dkg_service),
+            aux_info_service: Arc::new(aux_info_service),
         }
     }
 }

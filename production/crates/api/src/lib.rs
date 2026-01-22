@@ -48,7 +48,13 @@ pub fn create_router(state: AppState) -> Router {
         .route("/wallet/address", get(routes::wallet::get_address))
         // Cluster endpoints
         .route("/cluster/status", get(routes::cluster::get_cluster_status))
-        .route("/cluster/nodes", get(routes::cluster::list_nodes));
+        .route("/cluster/nodes", get(routes::cluster::list_nodes))
+        // DKG endpoints
+        .nest("/dkg", routes::dkg::routes())
+        // Aux info endpoints
+        .nest("/aux-info", routes::aux_info::routes())
+        // Presignature pool endpoints
+        .nest("/presignatures", routes::presig::routes());
 
     // Build the complete router with middleware
     Router::new()

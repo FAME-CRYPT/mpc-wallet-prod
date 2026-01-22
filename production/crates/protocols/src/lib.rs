@@ -24,6 +24,8 @@
 pub mod bench;
 pub mod cggmp24;
 pub mod frost;
+// NOTE: integration module contains outdated API usage - using cggmp24/frost modules directly instead
+// pub mod integration;
 pub mod p2p;
 pub mod relay;
 pub mod transport;

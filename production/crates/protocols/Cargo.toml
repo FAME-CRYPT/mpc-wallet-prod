@@ -43,6 +43,9 @@ async-trait = "0.1"
 # Pin projection for Stream/Sink implementations
 pin-project-lite = "0.2"
 
+# UUID for unique IDs
+uuid.workspace = true
+
 # QUIC transport
 quinn.workspace = true
 rustls.workspace = true

@@ -18,12 +18,24 @@ pub mod service;
 pub mod timeout_monitor;
 pub mod health_checker;
 pub mod error;
+pub mod dkg_service;
+pub mod aux_info_service;
+pub mod presig_service;
+pub mod signing_coordinator;
+pub mod protocol_router;
+pub mod message_router;
 
 pub use config::{OrchestrationConfig, OrchestrationConfigBuilder};
 pub use service::{OrchestrationService, OrchestrationServiceBuilder};
 pub use timeout_monitor::{TimeoutMonitor, TimeoutMonitorBuilder};
 pub use health_checker::{HealthChecker, HealthCheckerBuilder};
 pub use error::{OrchestrationError, Result};
+pub use dkg_service::{DkgService, DkgResult, DkgStatus, DkgCeremony, ProtocolType};
+pub use aux_info_service::{AuxInfoService, AuxInfoResult, AuxInfoStatus, AuxInfoCeremony};
+pub use presig_service::{PresignatureService, PresignatureStats};
+pub use signing_coordinator::{SigningCoordinator, SignatureProtocol, SigningRequest, SignatureShare, CombinedSignature};
+pub use protocol_router::{ProtocolRouter, ProtocolSelection, BitcoinAddressType};
+pub use message_router::{MessageRouter, ProtocolMessage, ProtocolType as MessageProtocolType};
 
 /// Re-export commonly used types
 pub mod prelude {

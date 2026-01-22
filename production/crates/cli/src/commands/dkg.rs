@@ -40,7 +40,7 @@ impl std::str::FromStr for DkgProtocol {
 
 /// Start DKG ceremony
 pub async fn start_dkg(
-    _client: &ApiClient,
+    client: &ApiClient,
     formatter: &OutputFormatter,
     protocol: DkgProtocol,
     threshold: u32,
@@ -74,110 +74,113 @@ pub async fn start_dkg(
 
     println!();
 
-    // TODO: Once the API endpoint is available, call it here
-    // For now, provide a helpful message
-    formatter.warning("DKG API endpoint not yet implemented");
-    formatter.info("The DKG ceremony would perform the following steps:");
-    println!();
-    println!("  1. Initialize DKG session with parameters");
-    println!("  2. Distribute key shares among {} participants", total);
-    println!("  3. Verify share consistency");
-    println!("  4. Generate threshold key with {}-of-{} signing", threshold, total);
-    println!();
+    // Generate participant IDs (1..=total)
+    let participants: Vec<u64> = (1..=total as u64).collect();
 
-    match protocol {
-        DkgProtocol::Cggmp24 => {
-            formatter.info("CGGMP24 will generate keys for:");
-            println!("    - SegWit (P2WPKH) addresses");
-            println!("    - ECDSA threshold signatures");
-        }
-        DkgProtocol::Frost => {
-            formatter.info("FROST will generate keys for:");
-            println!("    - Taproot (P2TR) addresses");
-            println!("    - Schnorr threshold signatures");
-        }
+    // Show progress indicator
+    let pb = if !formatter.json_mode {
+        let progress = ProgressBar::new_spinner();
+        progress.set_style(
+            ProgressStyle::default_spinner()
+                .template("{spinner:.green} {msg}")
+                .unwrap(),
+        );
+        progress.set_message("Initiating DKG ceremony...");
+        progress.enable_steady_tick(Duration::from_millis(100));
+        Some(progress)
+    } else {
+        None
+    };
+
+    // Call API
+    let protocol_str = match protocol {
+        DkgProtocol::Cggmp24 => "cggmp24".to_string(),
+        DkgProtocol::Frost => "frost".to_string(),
+    };
+
+    let result = client
+        .start_dkg(protocol_str, threshold, total, participants)
+        .await?;
+
+    if let Some(pb) = pb {
+        pb.finish_and_clear();
     }
 
-    println!();
-    formatter.info("To implement DKG support, add the following API endpoint:");
-    println!("  POST /api/v1/dkg/start");
-    println!("  Body: {{ \"protocol\": \"{}\", \"threshold\": {}, \"total\": {} }}",
-        protocol.to_string().to_lowercase(), threshold, total);
+    // Display results
+    if formatter.json_mode {
+        formatter.json(&result)?;
+    } else {
+        if result.success {
+            formatter.success("DKG ceremony completed successfully!");
+            println!();
+            formatter.kv("Session ID", &result.session_id);
+            formatter.kv("Party Index", &result.party_index.to_string());
+            formatter.kv("Key Share Size", &format!("{} bytes", result.key_share_size_bytes));
+            println!();
 
-    // Simulate DKG progress (remove this once real API is available)
-    if !formatter.json_mode {
-        println!();
-        let simulate = dialoguer::Confirm::new()
-            .with_prompt("Simulate DKG ceremony progress?")
-            .default(false)
-            .interact()
-            .unwrap_or(false);
-
-        if simulate {
-            simulate_dkg_progress(formatter, protocol, total).await?;
+            match protocol {
+                DkgProtocol::Cggmp24 => {
+                    formatter.info("Generated CGGMP24 key for:");
+                    println!("  - SegWit (P2WPKH) addresses");
+                    println!("  - ECDSA threshold signatures");
+                }
+                DkgProtocol::Frost => {
+                    formatter.info("Generated FROST key for:");
+                    println!("  - Taproot (P2TR) addresses");
+                    println!("  - Schnorr threshold signatures");
+                }
+            }
+        } else {
+            formatter.error(&format!(
+                "DKG ceremony failed: {}",
+                result.error.unwrap_or_else(|| "Unknown error".to_string())
+            ));
         }
     }
-
-    Ok(())
-}
-
-/// Simulate DKG progress for demonstration
-async fn simulate_dkg_progress(
-    formatter: &OutputFormatter,
-    protocol: DkgProtocol,
-    total: u32,
-) -> Result<()> {
-    let pb = ProgressBar::new(100);
-    pb.set_style(
-        ProgressStyle::default_bar()
-            .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} {msg}")
-            .unwrap()
-            .progress_chars("#>-"),
-    );
-
-    pb.set_message("Initializing DKG session...");
-    tokio::time::sleep(Duration::from_millis(500)).await;
-    pb.inc(20);
-
-    pb.set_message(format!("Distributing shares to {} participants...", total));
-    tokio::time::sleep(Duration::from_secs(1)).await;
-    pb.inc(30);
-
-    pb.set_message("Verifying share consistency...");
-    tokio::time::sleep(Duration::from_millis(800)).await;
-    pb.inc(30);
-
-    pb.set_message(format!("Generating {} key...", protocol));
-    tokio::time::sleep(Duration::from_millis(600)).await;
-    pb.inc(20);
-
-    pb.finish_with_message("DKG ceremony completed!");
-
-    println!();
-    formatter.success(&format!(
-        "{} key generation completed successfully",
-        protocol
-    ));
 
     Ok(())
 }
 
 /// Get DKG status
 pub async fn get_dkg_status(
-    _client: &ApiClient,
+    client: &ApiClient,
     formatter: &OutputFormatter,
     session_id: Option<String>,
 ) -> Result<()> {
     formatter.header("DKG Status");
 
-    if let Some(id) = session_id {
-        formatter.kv("Session ID", &id);
+    if let Some(id) = &session_id {
+        formatter.kv("Querying Session", id);
+        println!();
     }
 
-    println!();
-    formatter.warning("DKG status API endpoint not yet implemented");
-    formatter.info("To implement DKG status checking, add the following API endpoint:");
-    println!("  GET /api/v1/dkg/status/:session_id");
+    // Call API
+    let status = client.get_dkg_status().await?;
+
+    // Display results
+    if formatter.json_mode {
+        formatter.json(&status)?;
+    } else {
+        if status.has_key_share {
+            formatter.success("Key share available");
+            println!();
+
+            if let Some(latest_session) = &status.latest_session_id {
+                formatter.kv("Latest Session ID", latest_session);
+            }
+            formatter.kv("Key Share Size", &format!("{} bytes", status.key_share_size_bytes));
+            formatter.kv("Total Ceremonies", &status.total_ceremonies.to_string());
+            println!();
+
+            formatter.info("Use 'threshold-wallet dkg start' to initiate a new ceremony");
+        } else {
+            formatter.warning("No key share available");
+            println!();
+            formatter.kv("Total Ceremonies", &status.total_ceremonies.to_string());
+            println!();
+            formatter.info("Run 'threshold-wallet dkg start' to generate keys");
+        }
+    }
 
     Ok(())
 }

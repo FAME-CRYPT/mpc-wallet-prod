@@ -287,6 +287,13 @@ pub enum NetworkMessage {
     DkgRound(DkgMessage),
     SigningRound(SigningMessage),
     PresignatureGen(PresignatureMessage),
+    /// Generic protocol message for message router
+    Protocol {
+        session_id: String,
+        from: NodeId,
+        to: NodeId,
+        payload: Vec<u8>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

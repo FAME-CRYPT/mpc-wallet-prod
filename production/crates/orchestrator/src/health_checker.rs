@@ -9,7 +9,7 @@ use crate::error::{OrchestrationError, Result};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinHandle;
 use tracing::{debug, info, warn};
 use serde::{Deserialize, Serialize};
@@ -238,7 +238,7 @@ impl HealthCheckerBuilder {
         self
     }
 
-    pub fn with_etcd(self, _etcd: Arc<threshold_storage::EtcdStorage>) -> Self {
+    pub fn with_etcd(self, _etcd: Arc<Mutex<threshold_storage::EtcdStorage>>) -> Self {
         // Ignore etcd parameter for now - using in-memory state instead
         self
     }

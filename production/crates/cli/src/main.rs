@@ -78,6 +78,10 @@ enum Commands {
     #[command(subcommand)]
     Dkg(DkgCommands),
 
+    /// Aux Info (Auxiliary Information) operations
+    #[command(subcommand)]
+    AuxInfo(AuxInfoCommands),
+
     /// Presignature operations
     #[command(subcommand)]
     Presig(PresigCommands),
@@ -140,6 +144,19 @@ enum DkgCommands {
         #[arg(long, value_name = "ID")]
         session_id: Option<String>,
     },
+}
+
+#[derive(Subcommand)]
+enum AuxInfoCommands {
+    /// Start aux info generation ceremony
+    Start {
+        /// Number of parties
+        #[arg(long, default_value = "5")]
+        num_parties: u16,
+    },
+
+    /// Get aux info status
+    Status,
 }
 
 #[derive(Subcommand)]
@@ -231,6 +248,7 @@ async fn main() -> Result<()> {
         Commands::Tx(cmd) => handle_tx_command(cmd, &client, &formatter).await,
         Commands::Cluster(cmd) => handle_cluster_command(cmd, &client, &formatter).await,
         Commands::Dkg(cmd) => handle_dkg_command(cmd, &client, &formatter).await,
+        Commands::AuxInfo(cmd) => handle_aux_info_command(cmd, &client, &formatter).await,
         Commands::Presig(cmd) => handle_presig_command(cmd, &client, &formatter).await,
         Commands::Config(_) => unreachable!(), // Handled above
     };
@@ -293,6 +311,21 @@ async fn handle_dkg_command(
         }
         DkgCommands::Status { session_id } => {
             commands::dkg::get_dkg_status(client, formatter, session_id).await
+        }
+    }
+}
+
+async fn handle_aux_info_command(
+    cmd: AuxInfoCommands,
+    client: &ApiClient,
+    formatter: &OutputFormatter,
+) -> Result<()> {
+    match cmd {
+        AuxInfoCommands::Start { num_parties } => {
+            commands::aux_info::start_aux_info(client, formatter, num_parties).await
+        }
+        AuxInfoCommands::Status => {
+            commands::aux_info::get_aux_info_status(client, formatter).await
         }
     }
 }

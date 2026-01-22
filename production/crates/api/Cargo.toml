@@ -25,6 +25,7 @@ threshold-types = { path = "../types" }
 threshold-bitcoin = { path = "../bitcoin" }
 threshold-storage = { path = "../storage" }
 threshold-consensus = { path = "../consensus" }
+threshold-network = { path = "../network" }
 protocols = { path = "../protocols" }
 threshold-orchestrator = { path = "../orchestrator" }
 

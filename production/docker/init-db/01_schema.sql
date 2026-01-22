@@ -122,6 +122,45 @@ CREATE INDEX idx_presignature_usage_transaction_id ON presignature_usage(transac
 CREATE INDEX idx_presignature_usage_used_at ON presignature_usage(used_at DESC);
 CREATE INDEX idx_presignature_usage_protocol ON presignature_usage(protocol);
 
+-- DKG ceremonies table (for tracking distributed key generation)
+CREATE TABLE IF NOT EXISTS dkg_ceremonies (
+    id BIGSERIAL PRIMARY KEY,
+    session_id TEXT NOT NULL UNIQUE,
+    protocol TEXT NOT NULL CHECK (protocol IN ('cggmp24', 'frost')),
+    threshold INTEGER NOT NULL CHECK (threshold > 0),
+    total_nodes INTEGER NOT NULL CHECK (total_nodes > 0),
+    status TEXT NOT NULL CHECK (status IN ('running', 'completed', 'failed')),
+    public_key BYTEA,
+    started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    completed_at TIMESTAMPTZ,
+    error TEXT,
+    CONSTRAINT valid_dkg_threshold CHECK (threshold > total_nodes / 2 AND threshold <= total_nodes),
+    CONSTRAINT valid_completion CHECK (
+        (status = 'completed' AND public_key IS NOT NULL AND completed_at IS NOT NULL) OR
+        (status = 'failed' AND completed_at IS NOT NULL) OR
+        (status = 'running' AND completed_at IS NULL)
+    )
+);
+
+CREATE INDEX idx_dkg_ceremonies_session_id ON dkg_ceremonies(session_id);
+CREATE INDEX idx_dkg_ceremonies_protocol ON dkg_ceremonies(protocol);
+CREATE INDEX idx_dkg_ceremonies_status ON dkg_ceremonies(status);
+CREATE INDEX idx_dkg_ceremonies_started_at ON dkg_ceremonies(started_at DESC);
+
+-- Key shares table (encrypted key shares per node)
+CREATE TABLE IF NOT EXISTS key_shares (
+    id BIGSERIAL PRIMARY KEY,
+    ceremony_id BIGINT NOT NULL REFERENCES dkg_ceremonies(id) ON DELETE CASCADE,
+    node_id BIGINT NOT NULL CHECK (node_id > 0),
+    encrypted_share BYTEA NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(ceremony_id, node_id)
+);
+
+CREATE INDEX idx_key_shares_ceremony_id ON key_shares(ceremony_id);
+CREATE INDEX idx_key_shares_node_id ON key_shares(node_id);
+CREATE INDEX idx_key_shares_created_at ON key_shares(created_at DESC);
+
 -- Node status table (for tracking node health)
 CREATE TABLE IF NOT EXISTS node_status (
     id BIGSERIAL PRIMARY KEY,
@@ -275,3 +314,5 @@ COMMENT ON TABLE byzantine_violations IS 'Detected Byzantine fault tolerance vio
 COMMENT ON TABLE presignature_usage IS 'Tracking of presignature pool usage for fast signing';
 COMMENT ON TABLE node_status IS 'Real-time status of all nodes in the network';
 COMMENT ON TABLE audit_log IS 'Immutable audit trail for compliance';
+COMMENT ON TABLE dkg_ceremonies IS 'Distributed key generation ceremonies for CGGMP24 and FROST protocols';
+COMMENT ON TABLE key_shares IS 'Encrypted threshold key shares stored per node after DKG';

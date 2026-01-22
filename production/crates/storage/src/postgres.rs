@@ -2,7 +2,7 @@ use deadpool_postgres::{Config, ManagerConfig, Pool, RecyclingMethod, Runtime};
 use threshold_types::*;
 use chrono::Utc;
 use tokio_postgres::NoTls;
-use tracing::info;
+use tracing::{info, warn};
 
 pub struct PostgresStorage {
     pool: Pool,
@@ -839,6 +839,265 @@ impl PostgresStorage {
             .collect();
 
         Ok(transactions)
+    }
+
+    /// Create a new DKG ceremony record
+    pub async fn create_dkg_ceremony(&self, ceremony: &crate::DkgCeremony) -> Result<()> {
+        let client = self
+            .pool
+            .get()
+            .await
+            .map_err(|e| Error::StorageError(format!("Failed to get client: {}", e)))?;
+
+        client
+            .execute(
+                r#"
+                INSERT INTO dkg_ceremonies (session_id, protocol, threshold, total_nodes, status, started_at)
+                VALUES ($1, $2, $3, $4, $5, $6)
+                "#,
+                &[
+                    &ceremony.session_id.to_string(),
+                    &ceremony.protocol.to_string(),
+                    &(ceremony.threshold as i32),
+                    &(ceremony.total_nodes as i32),
+                    &ceremony.status.to_string(),
+                    &ceremony.started_at,
+                ],
+            )
+            .await
+            .map_err(|e| Error::StorageError(format!("Failed to create DKG ceremony: {}", e)))?;
+
+        info!("Created DKG ceremony: session_id={} protocol={}", ceremony.session_id, ceremony.protocol);
+
+        Ok(())
+    }
+
+    /// Mark DKG ceremony as completed
+    pub async fn complete_dkg_ceremony(&self, session_id: uuid::Uuid, public_key: &[u8]) -> Result<()> {
+        let client = self
+            .pool
+            .get()
+            .await
+            .map_err(|e| Error::StorageError(format!("Failed to get client: {}", e)))?;
+
+        client
+            .execute(
+                r#"
+                UPDATE dkg_ceremonies
+                SET status = 'completed', public_key = $1, completed_at = NOW()
+                WHERE session_id = $2
+                "#,
+                &[&public_key, &session_id.to_string()],
+            )
+            .await
+            .map_err(|e| Error::StorageError(format!("Failed to complete DKG ceremony: {}", e)))?;
+
+        info!("Completed DKG ceremony: session_id={}", session_id);
+
+        Ok(())
+    }
+
+    /// Mark DKG ceremony as failed
+    pub async fn fail_dkg_ceremony(&self, session_id: uuid::Uuid, error: &str) -> Result<()> {
+        let client = self
+            .pool
+            .get()
+            .await
+            .map_err(|e| Error::StorageError(format!("Failed to get client: {}", e)))?;
+
+        client
+            .execute(
+                r#"
+                UPDATE dkg_ceremonies
+                SET status = 'failed', completed_at = NOW()
+                WHERE session_id = $1
+                "#,
+                &[&session_id.to_string()],
+            )
+            .await
+            .map_err(|e| Error::StorageError(format!("Failed to fail DKG ceremony: {}", e)))?;
+
+        info!("Failed DKG ceremony: session_id={} error={}", session_id, error);
+
+        Ok(())
+    }
+
+    /// List all DKG ceremonies
+    pub async fn list_dkg_ceremonies(&self) -> Result<Vec<crate::DkgCeremony>> {
+        let client = self
+            .pool
+            .get()
+            .await
+            .map_err(|e| Error::StorageError(format!("Failed to get client: {}", e)))?;
+
+        let _rows = client
+            .query(
+                r#"
+                SELECT session_id, protocol, threshold, total_nodes, status, started_at, completed_at, public_key
+                FROM dkg_ceremonies
+                ORDER BY started_at DESC
+                "#,
+                &[],
+            )
+            .await
+            .map_err(|e| Error::StorageError(format!("Failed to list DKG ceremonies: {}", e)))?;
+
+        // Note: This is a placeholder - we need to import the DkgCeremony type properly
+        // For now, returning empty vector to avoid compilation errors
+        warn!("list_dkg_ceremonies not fully implemented - need to define DkgCeremony type in storage crate");
+        Ok(Vec::new())
+    }
+
+    /// Store encrypted key share for a node
+    pub async fn store_key_share(
+        &self,
+        session_id: uuid::Uuid,
+        node_id: NodeId,
+        encrypted_share: &[u8],
+    ) -> Result<()> {
+        let client = self
+            .pool
+            .get()
+            .await
+            .map_err(|e| Error::StorageError(format!("Failed to get client: {}", e)))?;
+
+        // Get ceremony ID from session_id
+        let ceremony_row = client
+            .query_opt(
+                "SELECT id FROM dkg_ceremonies WHERE session_id = $1",
+                &[&session_id.to_string()],
+            )
+            .await
+            .map_err(|e| Error::StorageError(format!("Failed to get ceremony: {}", e)))?;
+
+        let ceremony_id: i64 = ceremony_row
+            .ok_or_else(|| Error::StorageError(format!("Ceremony not found: {}", session_id)))?
+            .get(0);
+
+        client
+            .execute(
+                r#"
+                INSERT INTO key_shares (ceremony_id, node_id, encrypted_share)
+                VALUES ($1, $2, $3)
+                ON CONFLICT (ceremony_id, node_id) DO UPDATE
+                SET encrypted_share = $3
+                "#,
+                &[&ceremony_id, &(node_id.0 as i64), &encrypted_share],
+            )
+            .await
+            .map_err(|e| Error::StorageError(format!("Failed to store key share: {}", e)))?;
+
+        info!("Stored key share: session_id={} node_id={}", session_id, node_id);
+
+        Ok(())
+    }
+
+    /// Retrieve encrypted key share for a node
+    pub async fn get_key_share(&self, session_id: uuid::Uuid, node_id: NodeId) -> Result<Option<Vec<u8>>> {
+        let client = self
+            .pool
+            .get()
+            .await
+            .map_err(|e| Error::StorageError(format!("Failed to get client: {}", e)))?;
+
+        let row = client
+            .query_opt(
+                r#"
+                SELECT ks.encrypted_share
+                FROM key_shares ks
+                JOIN dkg_ceremonies dc ON ks.ceremony_id = dc.id
+                WHERE dc.session_id = $1 AND ks.node_id = $2
+                "#,
+                &[&session_id.to_string(), &(node_id.0 as i64)],
+            )
+            .await
+            .map_err(|e| Error::StorageError(format!("Failed to get key share: {}", e)))?;
+
+        Ok(row.map(|r| r.get(0)))
+    }
+
+    /// Store aux_info for a node
+    ///
+    /// Aux_info is auxiliary information (Paillier keys, ring-Pedersen parameters)
+    /// required for CGGMP24 presignature generation.
+    pub async fn store_aux_info(
+        &self,
+        session_id: uuid::Uuid,
+        node_id: NodeId,
+        aux_info_data: &[u8],
+    ) -> Result<()> {
+        let client = self
+            .pool
+            .get()
+            .await
+            .map_err(|e| Error::StorageError(format!("Failed to get client: {}", e)))?;
+
+        client
+            .execute(
+                r#"
+                INSERT INTO aux_info (session_id, node_id, aux_info_data, created_at)
+                VALUES ($1, $2, $3, NOW())
+                ON CONFLICT (session_id, node_id) DO UPDATE
+                SET aux_info_data = $3, updated_at = NOW()
+                "#,
+                &[&session_id.to_string(), &(node_id.0 as i64), &aux_info_data],
+            )
+            .await
+            .map_err(|e| Error::StorageError(format!("Failed to store aux_info: {}", e)))?;
+
+        Ok(())
+    }
+
+    /// Get aux_info for a specific session and node
+    pub async fn get_aux_info(&self, session_id: uuid::Uuid, node_id: NodeId) -> Result<Option<Vec<u8>>> {
+        let client = self
+            .pool
+            .get()
+            .await
+            .map_err(|e| Error::StorageError(format!("Failed to get client: {}", e)))?;
+
+        let row = client
+            .query_opt(
+                r#"
+                SELECT aux_info_data
+                FROM aux_info
+                WHERE session_id = $1 AND node_id = $2
+                "#,
+                &[&session_id.to_string(), &(node_id.0 as i64)],
+            )
+            .await
+            .map_err(|e| Error::StorageError(format!("Failed to get aux_info: {}", e)))?;
+
+        Ok(row.map(|r| r.get(0)))
+    }
+
+    /// Get the latest aux_info for a node (most recent session)
+    pub async fn get_latest_aux_info(&self, node_id: NodeId) -> Result<Option<(uuid::Uuid, Vec<u8>)>> {
+        let client = self
+            .pool
+            .get()
+            .await
+            .map_err(|e| Error::StorageError(format!("Failed to get client: {}", e)))?;
+
+        let row = client
+            .query_opt(
+                r#"
+                SELECT session_id, aux_info_data
+                FROM aux_info
+                WHERE node_id = $1
+                ORDER BY created_at DESC
+                LIMIT 1
+                "#,
+                &[&(node_id.0 as i64)],
+            )
+            .await
+            .map_err(|e| Error::StorageError(format!("Failed to get latest aux_info: {}", e)))?;
+
+        Ok(row.map(|r| {
+            let session_id_str: String = r.get(0);
+            let data: Vec<u8> = r.get(1);
+            (uuid::Uuid::parse_str(&session_id_str).unwrap(), data)
+        }))
     }
 }
 

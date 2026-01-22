@@ -19,7 +19,10 @@ use threshold_orchestrator::{
     TimeoutMonitor, TimeoutMonitorBuilder,
     HealthChecker, HealthCheckerBuilder,
     OrchestrationConfig,
+    DkgService,
+    AuxInfoService,
 };
+use threshold_network::{QuicEngine, PeerRegistry};
 use tracing::{info, error, warn};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 use tokio::signal;
@@ -47,9 +50,9 @@ async fn main() -> Result<()> {
     let postgres = Arc::new(PostgresStorage::new(&config.postgres_config).await?);
     info!("PostgreSQL storage initialized");
 
-    // Initialize etcd storage
+    // Initialize etcd storage (with Mutex for interior mutability)
     info!("Connecting to etcd cluster: {:?}", config.etcd_endpoints);
-    let etcd = Arc::new(EtcdStorage::new(config.etcd_endpoints.clone()).await?);
+    let etcd = Arc::new(tokio::sync::Mutex::new(EtcdStorage::new(config.etcd_endpoints.clone()).await?));
     info!("etcd storage initialized");
 
     // Initialize Bitcoin client
@@ -65,7 +68,53 @@ async fn main() -> Result<()> {
     let postgres_for_state = PostgresStorage::new(&config.postgres_config).await?;
     let etcd_for_state = EtcdStorage::new(config.etcd_endpoints.clone()).await?;
     let bitcoin_for_state = BitcoinClient::new(config.bitcoin_network)?;
-    let state = AppState::new(postgres_for_state, etcd_for_state, bitcoin_for_state);
+
+    // Create QuicEngine for DKG service
+    // Note: For API server, we create a minimal QuicEngine without full transport setup
+    // The DKG service will use this for network communication
+    let registry_url = config.registry_url.clone().unwrap_or_else(|| "http://mpc-coordinator:3000".to_string());
+    let peer_registry = Arc::new(PeerRegistry::new(
+        threshold_types::NodeId(config.node_id),
+        Some(registry_url.clone()),
+    ));
+    let mut quic_engine = QuicEngine::new(
+        threshold_types::NodeId(config.node_id),
+        peer_registry,
+        None, // mTLS config will be added later if needed
+    );
+    // Initialize client endpoint for outgoing connections
+    quic_engine.init_client().await?;
+    let quic_engine = Arc::new(quic_engine);
+    info!("QUIC engine initialized for DKG service");
+
+    // Create message router for protocol communication
+    let message_router = Arc::new(threshold_orchestrator::MessageRouter::new(
+        Arc::clone(&quic_engine),
+        threshold_types::NodeId(config.node_id),
+    ));
+    info!("Message router initialized");
+
+    // Create DKG service
+    let dkg_service = DkgService::new(
+        Arc::clone(&postgres),
+        Arc::clone(&etcd),
+        Arc::clone(&quic_engine),
+        Arc::clone(&message_router),
+        threshold_types::NodeId(config.node_id),
+    );
+    info!("DKG service initialized");
+
+    // Create Aux Info service
+    let aux_info_service = AuxInfoService::new(
+        Arc::clone(&postgres),
+        Arc::clone(&etcd),
+        Arc::clone(&quic_engine),
+        Arc::clone(&message_router),
+        threshold_types::NodeId(config.node_id),
+    );
+    info!("Aux info service initialized");
+
+    let state = AppState::new(postgres_for_state, etcd_for_state, bitcoin_for_state, dkg_service, aux_info_service);
 
     // Parse listen address
     let addr: SocketAddr = config.listen_addr.parse()?;
