@@ -188,6 +188,47 @@ async fn main() -> Result<()> {
         let timeout_handle = Arc::clone(&timeout_monitor).start();
         info!("Timeout monitor started");
 
+        // Create aux info service for orchestration (fresh instance)
+        let aux_info_for_presig = Arc::new(threshold_orchestrator::AuxInfoService::new(
+            Arc::clone(&postgres),
+            Arc::clone(&etcd),
+            Arc::clone(&quic_engine),
+            Arc::clone(&message_router),
+            threshold_types::NodeId(config.node_id),
+        ));
+        info!("Aux info service initialized for orchestration");
+
+        // Create presignature service (needed by signing coordinator)
+        let presig_service = Arc::new(threshold_orchestrator::PresignatureService::new(
+            Arc::clone(&quic_engine),
+            Arc::clone(&message_router),
+            Arc::clone(&postgres),
+            Arc::clone(&etcd),
+            Arc::clone(&aux_info_for_presig),
+            threshold_types::NodeId(config.node_id),
+        ));
+        info!("Presignature service initialized");
+
+        // Create signing coordinator for MPC signing protocols
+        // SigningCoordinator needs Arc<EtcdStorage>, create fresh instance
+        let etcd_for_signing = Arc::new(EtcdStorage::new(config.etcd_endpoints.clone()).await?);
+        let signing_coordinator = Arc::new(threshold_orchestrator::SigningCoordinator::new(
+            Arc::clone(&quic_engine),
+            Arc::clone(&postgres),
+            etcd_for_signing,
+            Arc::clone(&presig_service),
+            threshold_types::NodeId(config.node_id),
+            config.threshold as usize,
+        ));
+        info!("Signing coordinator initialized");
+
+        // Create protocol router for automatic CGGMP24/FROST selection
+        let protocol_router = Arc::new(threshold_orchestrator::ProtocolRouter::new(
+            true, // CGGMP24 enabled (for P2WPKH/P2WSH)
+            true, // FROST enabled (for P2TR Taproot)
+        ));
+        info!("Protocol router initialized");
+
         // Start orchestration service
         let orchestrator = OrchestrationServiceBuilder::new()
             .with_config(orchestration_config)
@@ -196,6 +237,8 @@ async fn main() -> Result<()> {
             .with_postgres(Arc::clone(&postgres))
             .with_etcd(Arc::clone(&etcd))
             .with_bitcoin(Arc::clone(&bitcoin))
+            .with_signing_coordinator(Arc::clone(&signing_coordinator))
+            .with_protocol_router(Arc::clone(&protocol_router))
             .build()?;
         let orchestrator_handle = Arc::clone(&orchestrator).start();
         info!("Orchestration service started");
