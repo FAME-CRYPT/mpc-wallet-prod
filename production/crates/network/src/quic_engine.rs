@@ -394,8 +394,8 @@ impl QuicEngine {
 
                 info!("📥 QuicEngine: Read {} bytes from stream", buffer.len());
 
-                // Deserialize NetworkMessage
-                let message: NetworkMessage = match bincode::deserialize(&buffer) {
+                // Deserialize NetworkMessage using JSON (supports deserialize_any)
+                let message: NetworkMessage = match serde_json::from_slice(&buffer) {
                     Ok(msg) => msg,
                     Err(e) => {
                         warn!("Failed to deserialize message: {}", e);
