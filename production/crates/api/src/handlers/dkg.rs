@@ -200,6 +200,40 @@ pub async fn dkg_status(
     Ok(Json(response))
 }
 
+/// Join an existing DKG ceremony
+///
+/// POST /api/v1/dkg/join/:session_id
+pub async fn join_dkg(
+    State(state): State<AppState>,
+    axum::extract::Path(session_id): axum::extract::Path<String>,
+) -> Result<Json<DkgResponse>, ApiError> {
+    // Parse session ID
+    let session_uuid = uuid::Uuid::parse_str(&session_id)
+        .map_err(|_| ApiError::BadRequest("Invalid session ID format".to_string()))?;
+
+    // Join the DKG ceremony (participant node)
+    let result = state
+        .dkg_service
+        .join_dkg_ceremony(session_uuid)
+        .await
+        .map_err(|e| ApiError::InternalError(format!("Failed to join DKG ceremony: {}", e)))?;
+
+    // Convert public key to hex
+    let public_key_hex = hex::encode(&result.public_key);
+
+    let response = DkgResponse {
+        success: true,
+        session_id: result.session_id.to_string(),
+        protocol: result.protocol.to_string(),
+        public_key: public_key_hex,
+        address: result.address,
+        threshold: result.threshold,
+        total_nodes: result.total_nodes,
+    };
+
+    Ok(Json(response))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

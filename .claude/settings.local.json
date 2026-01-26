@@ -102,7 +102,16 @@
       "Bash(winpty docker exec -it mpc-node-1 /app/mpc-wallet-server --help)",
       "Bash(TXID=\"71a90fed16f6db8bef15d59b096826703a0ef2782d9e5e6d2fde0708fd4a91fd\")",
       "Bash(TXID=\"e81b201b8810c0bfcb1c0dd6e2845c4001eff520955637e7b895dd663f1afe96\")",
-      "Bash(Select-Object -First 100)"
+      "Bash(Select-Object -First 100)",
+      "Bash(__NEW_LINE_8fd22c13777eb744__ echo \"\")",
+      "Bash(python3:*)",
+      "Bash(__NEW_LINE_7ff1f6fc3bdfea6d__ echo -e \"\\\\n\\\\n2. Cluster status:\")",
+      "Bash(__NEW_LINE_71d6e68708b1d2d9__ echo -e \"\\\\n\\\\n3. Trying transaction list:\")",
+      "Bash(__NEW_LINE_8f2f5af5c0586e01__ echo -e \"\\\\n\\\\n4. Trying tx list:\")",
+      "Bash(__NEW_LINE_f697ce59ab2acfb7__ echo \"\")",
+      "Bash(__NEW_LINE_a25190540a36cdb2__ echo \"\")",
+      "Bash(TXID=\"b4a7ea9c0fba711f956203eba14f30b230c3c50ec1e0a786bae1d3ce568f3c1c\":*)",
+      "Bash(wait)"
     ]
   }
 }

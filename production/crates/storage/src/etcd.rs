@@ -761,7 +761,10 @@ impl EtcdStorage {
     pub async fn acquire_lock(&self, key: &str, ttl_secs: i64) -> Result<bool> {
         match self.acquire_lock_internal(key, ttl_secs).await {
             Ok(_lease_id) => Ok(true),
-            Err(_) => Ok(false),
+            Err(e) => {
+                warn!("Failed to acquire lock for key={}: {}", key, e);
+                Ok(false)
+            }
         }
     }
 

@@ -87,6 +87,8 @@ pub struct QuicEngine {
     peer_registry: Arc<PeerRegistry>,
     /// Client endpoint for outgoing connections.
     client_endpoint: Option<Endpoint>,
+    /// Server endpoint for incoming connections.
+    server_endpoint: Arc<RwLock<Option<Endpoint>>>,
     /// Connection pools: node_id -> ConnectionPool.
     connection_pools: Arc<RwLock<HashMap<NodeId, ConnectionPool>>>,
     /// mTLS configuration placeholder.
@@ -190,6 +192,7 @@ impl QuicEngine {
             local_node_id,
             peer_registry,
             client_endpoint: None,
+            server_endpoint: Arc::new(RwLock::new(None)),
             connection_pools: Arc::new(RwLock::new(HashMap::new())),
             mtls_config,
         }
@@ -251,6 +254,171 @@ impl QuicEngine {
         info!("QUIC client endpoint initialized for node {}", self.local_node_id);
 
         Ok(())
+    }
+
+    /// Initialize the server endpoint for incoming connections.
+    ///
+    /// # Arguments
+    /// * `bind_addr` - Address to bind the server to (e.g., "0.0.0.0:5000")
+    ///
+    /// # Errors
+    /// Returns an error if the server cannot be started.
+    pub async fn init_server(&self, bind_addr: &str) -> NetworkResult<()> {
+        let server_config = self.server_config()?;
+
+        let socket_addr: std::net::SocketAddr = bind_addr.parse()
+            .map_err(|e| NetworkError::TlsConfigError(format!("Invalid bind address: {}", e)))?;
+
+        let endpoint = Endpoint::server(server_config, socket_addr)
+            .map_err(|e| NetworkError::TlsConfigError(format!("Failed to create server endpoint: {}", e)))?;
+
+        *self.server_endpoint.write().await = Some(endpoint);
+        info!("QUIC server endpoint initialized for node {} on {}", self.local_node_id, bind_addr);
+
+        Ok(())
+    }
+
+    /// Start listening for incoming QUIC connections and messages.
+    ///
+    /// This spawns a background task that continuously accepts connections
+    /// and processes incoming messages. Messages are dispatched via the
+    /// provided callback function.
+    ///
+    /// # Arguments
+    /// * `message_handler` - Callback function to handle incoming messages
+    ///
+    /// # Returns
+    /// A join handle for the listener task.
+    pub fn start_listener<F>(&self, message_handler: F) -> tokio::task::JoinHandle<()>
+    where
+        F: Fn(NodeId, NetworkMessage) -> () + Send + Sync + 'static,
+    {
+        let server_endpoint = Arc::clone(&self.server_endpoint);
+        let local_node_id = self.local_node_id;
+        let handler = Arc::new(message_handler);
+
+        tokio::spawn(async move {
+            info!("QUIC listener started for node {}", local_node_id);
+
+            loop {
+                let endpoint_guard = server_endpoint.read().await;
+                let endpoint = match endpoint_guard.as_ref() {
+                    Some(ep) => ep,
+                    None => {
+                        warn!("Server endpoint not initialized, listener exiting");
+                        break;
+                    }
+                };
+
+                // Accept incoming connection
+                let connecting = match endpoint.accept().await {
+                    Some(conn) => conn,
+                    None => {
+                        info!("Server endpoint closed, listener exiting");
+                        break;
+                    }
+                };
+
+                // Drop the read guard before awaiting
+                drop(endpoint_guard);
+
+                let handler_clone = Arc::clone(&handler);
+                // Spawn task to handle this connection
+                tokio::spawn(async move {
+                    match connecting.await {
+                        Ok(connection) => {
+                            debug!("Accepted connection from {}", connection.remote_address());
+                            Self::handle_connection(connection, local_node_id, handler_clone).await;
+                        }
+                        Err(e) => {
+                            warn!("Failed to establish connection: {}", e);
+                        }
+                    }
+                });
+            }
+
+            info!("QUIC listener stopped for node {}", local_node_id);
+        })
+    }
+
+    /// Handle an incoming QUIC connection.
+    async fn handle_connection<F>(
+        connection: Connection,
+        local_node_id: NodeId,
+        message_handler: Arc<F>,
+    )
+    where
+        F: Fn(NodeId, NetworkMessage) -> () + Send + Sync + 'static,
+    {
+        loop {
+            // Accept incoming unidirectional stream (matches open_uni on sender side)
+            let mut recv = match connection.accept_uni().await {
+                Ok(stream) => stream,
+                Err(quinn::ConnectionError::ApplicationClosed { .. }) => {
+                    debug!("Connection closed by peer");
+                    break;
+                }
+                Err(e) => {
+                    warn!("Failed to accept stream: {}", e);
+                    break;
+                }
+            };
+
+            // Spawn task to handle this stream
+            let handler_clone = Arc::clone(&message_handler);
+            tokio::spawn(async move {
+                info!("📥 QuicEngine: Receiving message on unidirectional stream");
+
+                // Read stream ID (8 bytes) + message length (4 bytes) + message
+                let mut header = vec![0u8; 12];
+                match recv.read_exact(&mut header).await {
+                    Ok(_) => {},
+                    Err(e) => {
+                        warn!("Failed to read stream header: {}", e);
+                        return;
+                    }
+                }
+
+                let _stream_id = u64::from_be_bytes(header[0..8].try_into().unwrap());
+                let msg_len = u32::from_be_bytes(header[8..12].try_into().unwrap()) as usize;
+
+                // Read message payload
+                let mut buffer = vec![0u8; msg_len];
+                match recv.read_exact(&mut buffer).await {
+                    Ok(_) => {},
+                    Err(e) => {
+                        warn!("Failed to read message payload: {}", e);
+                        return;
+                    }
+                }
+
+                info!("📥 QuicEngine: Read {} bytes from stream", buffer.len());
+
+                // Deserialize NetworkMessage
+                let message: NetworkMessage = match bincode::deserialize(&buffer) {
+                    Ok(msg) => msg,
+                    Err(e) => {
+                        warn!("Failed to deserialize message: {}", e);
+                        return;
+                    }
+                };
+
+                // Extract sender NodeId from message
+                let sender_node_id = match &message {
+                    NetworkMessage::Protocol { from, .. } => *from,
+                    NetworkMessage::DkgRound(msg) => msg.from,
+                    _ => {
+                        debug!("Ignoring non-protocol message");
+                        return;
+                    }
+                };
+
+                info!("📥 QuicEngine: Dispatching message from {}", sender_node_id);
+
+                // Dispatch message via callback
+                handler_clone(sender_node_id, message);
+            });
+        }
     }
 
     /// Create server configuration for incoming connections.
@@ -340,7 +508,8 @@ impl QuicEngine {
     /// * `stream_id` - Stream ID to use (must follow conventions)
     pub async fn send(&self, node_id: &NodeId, message: &NetworkMessage, stream_id: u64) -> NetworkResult<()> {
         let connection = self.get_or_create_connection(node_id).await?;
-        let encoded = bincode::serialize(message).map_err(|e| {
+        // Use JSON instead of bincode for NetworkMessage to support serde's deserialize_any
+        let encoded = serde_json::to_vec(message).map_err(|e| {
             NetworkError::CodecError(format!("Failed to serialize message: {}", e))
         })?;
 
@@ -447,7 +616,7 @@ impl QuicEngine {
             .with_client_auth_cert(vec![cert_der], key_der)
             .map_err(|e| NetworkError::TlsConfigError(e.to_string()))?;
 
-        rustls_config.alpn_protocols = vec![b"h3".to_vec()];
+        rustls_config.alpn_protocols = vec![b"mpc".to_vec()];
 
         // Convert to quinn config
         let mut config = ClientConfig::new(Arc::new(
@@ -479,7 +648,7 @@ impl QuicEngine {
             .with_single_cert(vec![cert_der], key_der)
             .map_err(|e| NetworkError::TlsConfigError(e.to_string()))?;
 
-        rustls_config.alpn_protocols = vec![b"h3".to_vec()];
+        rustls_config.alpn_protocols = vec![b"mpc".to_vec()];
 
         // Convert to quinn config
         let mut config = ServerConfig::with_crypto(Arc::new(

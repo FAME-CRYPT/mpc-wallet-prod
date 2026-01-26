@@ -160,7 +160,7 @@ impl ByzantineDetector {
 
         // Record valid vote to PostgreSQL
         self.postgres.record_vote(vote).await?;
-        self.postgres.update_node_last_seen(&vote.peer_id).await?;
+        self.postgres.update_node_last_seen(&vote.node_id).await?;
 
         // Check if threshold reached
         if new_count >= threshold as u64 {

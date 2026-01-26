@@ -2,7 +2,7 @@ use deadpool_postgres::{Config, ManagerConfig, Pool, RecyclingMethod, Runtime};
 use threshold_types::*;
 use chrono::Utc;
 use tokio_postgres::NoTls;
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 pub struct PostgresStorage {
     pool: Pool,
@@ -120,7 +120,7 @@ impl PostgresStorage {
     }
 
     /// Update node last seen timestamp
-    pub async fn update_node_last_seen(&self, _peer_id: &PeerId) -> Result<()> {
+    pub async fn update_node_last_seen(&self, node_id: &NodeId) -> Result<()> {
         let client = self
             .pool
             .get()
@@ -128,16 +128,17 @@ impl PostgresStorage {
             .map_err(|e| Error::StorageError(format!("Failed to get client: {}", e)))?;
 
         let timestamp = Utc::now();
+        let node_id_i64 = node_id.0 as i64;
 
         client
             .execute(
                 r#"
                 INSERT INTO node_status (node_id, status, last_heartbeat)
-                VALUES (0, 'active', $1)
+                VALUES ($1, 'active', $2)
                 ON CONFLICT (node_id) DO UPDATE
-                SET last_heartbeat = $1, updated_at = NOW()
+                SET last_heartbeat = $2, updated_at = NOW()
                 "#,
-                &[&timestamp],
+                &[&node_id_i64, &timestamp],
             )
             .await
             .map_err(|e| Error::StorageError(format!("Failed to update last seen: {}", e)))?;
@@ -849,27 +850,38 @@ impl PostgresStorage {
             .await
             .map_err(|e| Error::StorageError(format!("Failed to get client: {}", e)))?;
 
-        client
+        // Convert UUID to string for database storage
+        let session_id_str = ceremony.session_id.to_string();
+
+        let result = client
             .execute(
                 r#"
                 INSERT INTO dkg_ceremonies (session_id, protocol, threshold, total_nodes, status, started_at)
                 VALUES ($1, $2, $3, $4, $5, $6)
                 "#,
                 &[
-                    &ceremony.session_id.to_string(),
-                    &ceremony.protocol.to_string(),
+                    &session_id_str,
+                    &ceremony.protocol,
                     &(ceremony.threshold as i32),
                     &(ceremony.total_nodes as i32),
-                    &ceremony.status.to_string(),
+                    &ceremony.status,
                     &ceremony.started_at,
                 ],
             )
-            .await
-            .map_err(|e| Error::StorageError(format!("Failed to create DKG ceremony: {}", e)))?;
+            .await;
 
-        info!("Created DKG ceremony: session_id={} protocol={}", ceremony.session_id, ceremony.protocol);
-
-        Ok(())
+        match result {
+            Ok(_) => {
+                info!("Created DKG ceremony: session_id={} protocol={}", session_id_str, ceremony.protocol);
+                Ok(())
+            }
+            Err(e) => {
+                error!("Failed to insert DKG ceremony: SQL Error: {:?}", e);
+                error!("Ceremony data: session_id={}, protocol={}, threshold={}, total_nodes={}",
+                       session_id_str, ceremony.protocol, ceremony.threshold, ceremony.total_nodes);
+                Err(Error::StorageError(format!("Failed to create DKG ceremony: {}", e)))
+            }
+        }
     }
 
     /// Mark DKG ceremony as completed
@@ -920,6 +932,51 @@ impl PostgresStorage {
         info!("Failed DKG ceremony: session_id={} error={}", session_id, error);
 
         Ok(())
+    }
+
+    /// Get a specific DKG ceremony by session ID
+    pub async fn get_dkg_ceremony(&self, session_id: uuid::Uuid) -> Result<crate::DkgCeremony> {
+        let client = self
+            .pool
+            .get()
+            .await
+            .map_err(|e| Error::StorageError(format!("Failed to get client: {}", e)))?;
+
+        let row = client
+            .query_one(
+                r#"
+                SELECT session_id, protocol, threshold, total_nodes, status,
+                       public_key, started_at, completed_at, error
+                FROM dkg_ceremonies
+                WHERE session_id = $1
+                "#,
+                &[&session_id.to_string()],
+            )
+            .await
+            .map_err(|e| Error::StorageError(format!("Failed to get DKG ceremony: {}", e)))?;
+
+        let session_id_str: String = row.get(0);
+        let protocol: String = row.get(1);
+        let threshold: i32 = row.get(2);
+        let total_nodes: i32 = row.get(3);
+        let status: String = row.get(4);
+        let public_key: Option<Vec<u8>> = row.get(5);
+        let started_at: chrono::DateTime<chrono::Utc> = row.get(6);
+        let completed_at: Option<chrono::DateTime<chrono::Utc>> = row.get(7);
+        let error: Option<String> = row.get(8);
+
+        Ok(crate::DkgCeremony {
+            session_id: uuid::Uuid::parse_str(&session_id_str)
+                .map_err(|e| Error::StorageError(format!("Invalid UUID: {}", e)))?,
+            protocol,
+            threshold: threshold as u32,
+            total_nodes: total_nodes as u32,
+            status,
+            public_key,
+            started_at,
+            completed_at,
+            error,
+        })
     }
 
     /// List all DKG ceremonies

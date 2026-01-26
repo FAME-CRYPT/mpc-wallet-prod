@@ -221,6 +221,11 @@ impl MessageRouter {
             .await
             {
                 Ok(Ok(msg)) => {
+                    info!(
+                        "📬 MessageRouter received outgoing message: from={} to={} session={} seq={}",
+                        msg.from, msg.to, session_id, msg.sequence
+                    );
+
                     // Send message via QUIC
                     let network_msg = NetworkMessage::Protocol {
                         session_id: msg.session_id.to_string(),
@@ -238,8 +243,8 @@ impl MessageRouter {
                             msg.to, session_id, e
                         );
                     } else {
-                        debug!(
-                            "Sent message to {} for session {} (seq: {})",
+                        info!(
+                            "✅ Sent via QUIC to {} for session {} (seq: {})",
                             msg.to, session_id, msg.sequence
                         );
                     }
@@ -269,6 +274,11 @@ impl MessageRouter {
         payload: Vec<u8>,
         sequence: u64,
     ) -> Result<()> {
+        info!(
+            "📨 MessageRouter handling incoming from QUIC: from={} to={} session={}",
+            from, to, session_id_str
+        );
+
         // Parse session ID
         let session_id = Uuid::parse_str(session_id_str).map_err(|e| {
             OrchestrationError::Internal(format!("Invalid session ID {}: {}", session_id_str, e))
@@ -289,6 +299,11 @@ impl MessageRouter {
                     payload,
                     sequence,
                 };
+
+                info!(
+                    "✅ Forwarding to protocol: from={} to={} session={}",
+                    from, to, session_id
+                );
 
                 // Forward to protocol channel
                 if let Err(e) = session.incoming_tx.send(msg).await {

@@ -13,7 +13,7 @@
 //! Each protocol has its own DKG ceremony and produces different key types.
 
 use crate::error::{OrchestrationError, Result};
-use crate::message_router::{MessageRouter, ProtocolMessage, ProtocolType as RouterProtocolType};
+use crate::message_router::{MessageRouter, ProtocolMessage as RouterProtocolMessage, ProtocolType as RouterProtocolType};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -27,7 +27,9 @@ use uuid::Uuid;
 
 // Protocol keygen modules (use existing working implementations)
 use protocols::cggmp24::keygen as cggmp24_keygen;
+use protocols::cggmp24::runner::ProtocolMessage as Cggmp24Message;
 use protocols::frost::keygen as frost_keygen;
+use protocols::frost::keygen::ProtocolMessage as FrostMessage;
 
 // Bitcoin address derivation
 use common::bitcoin_address::{derive_p2tr_address, derive_p2wpkh_address, BitcoinNetwork};
@@ -116,10 +118,10 @@ impl DkgCeremony {
     fn to_storage(&self) -> threshold_storage::DkgCeremony {
         threshold_storage::DkgCeremony {
             session_id: self.session_id,
-            protocol: format!("{:?}", self.protocol),
+            protocol: format!("{:?}", self.protocol).to_lowercase(),
             threshold: self.threshold,
             total_nodes: self.total_nodes,
-            status: format!("{:?}", self.status),
+            status: format!("{:?}", self.status).to_lowercase(),
             public_key: self.public_key.clone(),
             started_at: self.started_at,
             completed_at: self.completed_at,
@@ -129,16 +131,16 @@ impl DkgCeremony {
 
     /// Convert from storage DkgCeremony
     fn from_storage(storage: threshold_storage::DkgCeremony) -> Self {
-        let protocol = match storage.protocol.as_str() {
-            "CGGMP24" => ProtocolType::CGGMP24,
-            "FROST" => ProtocolType::FROST,
+        let protocol = match storage.protocol.to_lowercase().as_str() {
+            "cggmp24" => ProtocolType::CGGMP24,
+            "frost" => ProtocolType::FROST,
             _ => ProtocolType::CGGMP24, // Default
         };
 
-        let status = match storage.status.as_str() {
-            "Running" => DkgStatus::Running,
-            "Completed" => DkgStatus::Completed,
-            "Failed" => DkgStatus::Failed,
+        let status = match storage.status.to_lowercase().as_str() {
+            "running" => DkgStatus::Running,
+            "completed" => DkgStatus::Completed,
+            "failed" => DkgStatus::Failed,
             _ => DkgStatus::Running, // Default
         };
 
@@ -410,6 +412,99 @@ impl DkgService {
         }
     }
 
+    /// Join an existing DKG ceremony (participant nodes)
+    ///
+    /// This method is called by non-coordinator nodes to join a DKG ceremony
+    /// that was already initiated by the coordinator node.
+    /// It reads the ceremony details from PostgreSQL and participates in the protocol.
+    pub async fn join_dkg_ceremony(&self, session_id: Uuid) -> Result<DkgResult> {
+        info!("Joining DKG ceremony: session_id={}", session_id);
+
+        // Read ceremony details from PostgreSQL (created by coordinator)
+        let ceremony_data = self.postgres
+            .get_dkg_ceremony(session_id)
+            .await
+            .map_err(|e| OrchestrationError::StorageError(format!("Ceremony not found: {}", e)))?;
+
+        // Parse protocol type
+        let protocol = match ceremony_data.protocol.as_str() {
+            "cggmp24" => ProtocolType::CGGMP24,
+            "frost" => ProtocolType::FROST,
+            _ => {
+                return Err(OrchestrationError::InvalidConfig(format!(
+                    "Unknown protocol: {}",
+                    ceremony_data.protocol
+                )));
+            }
+        };
+
+        // Build participants list
+        let participants: Vec<NodeId> = (1..=ceremony_data.total_nodes)
+            .map(|i| NodeId(i as u64))
+            .collect();
+
+        // Store in active ceremonies (for tracking)
+        {
+            let mut ceremonies = self.active_ceremonies.write().await;
+            ceremonies.insert(session_id, DkgCeremony {
+                session_id,
+                protocol,
+                threshold: ceremony_data.threshold,
+                total_nodes: ceremony_data.total_nodes,
+                participants: participants.clone(),
+                status: DkgStatus::Running,
+                current_round: 0,
+                started_at: ceremony_data.started_at,
+                completed_at: None,
+                public_key: None,
+                error: None,
+            });
+        }
+
+        // Run protocol-specific DKG (same as coordinator, but without lock)
+        let result = match protocol {
+            ProtocolType::CGGMP24 => self.run_cggmp24_dkg(session_id, participants).await,
+            ProtocolType::FROST => self.run_frost_dkg(session_id, participants).await,
+        };
+
+        match result {
+            Ok(public_key) => {
+                // Update ceremony status to completed
+                let mut ceremonies = self.active_ceremonies.write().await;
+                if let Some(ceremony) = ceremonies.get_mut(&session_id) {
+                    ceremony.status = DkgStatus::Completed;
+                    ceremony.completed_at = Some(Utc::now());
+                    ceremony.public_key = Some(public_key.clone());
+                }
+
+                // Derive Bitcoin address
+                let address = self.derive_address(protocol, &public_key)?;
+
+                Ok(DkgResult {
+                    session_id,
+                    protocol,
+                    public_key,
+                    address,
+                    threshold: ceremony_data.threshold,
+                    total_nodes: ceremony_data.total_nodes,
+                    completed_at: Utc::now(),
+                })
+            }
+            Err(e) => {
+                error!("DKG ceremony failed: session={} error={}", session_id, e);
+
+                // Update ceremony status to failed
+                let mut ceremonies = self.active_ceremonies.write().await;
+                if let Some(ceremony) = ceremonies.get_mut(&session_id) {
+                    ceremony.status = DkgStatus::Failed;
+                    ceremony.error = Some(e.to_string());
+                }
+
+                Err(e)
+            }
+        }
+    }
+
     /// Run CGGMP24 DKG ceremony (5-6 rounds)
     ///
     /// Uses the `cggmp24` library for ECDSA threshold key generation.
@@ -463,59 +558,99 @@ impl DkgService {
                 OrchestrationError::Internal(format!("Failed to register DKG session: {}", e))
             })?;
 
-        // Convert between ProtocolMessage and protocol-specific message types
-        // Spawn adapter task to convert incoming ProtocolMessages to protocol format
+        // Convert between RouterProtocolMessage and CGGMP24 protocol message types
+        // Spawn adapter task to convert incoming RouterProtocolMessages to CGGMP24 format
         let (protocol_incoming_tx, protocol_incoming_rx) = async_channel::bounded(100);
+        let session_id_for_incoming = session_id.to_string();
+        let node_id_for_incoming = self.node_id;
         tokio::spawn(async move {
-            while let Ok(proto_msg) = incoming_rx.recv().await {
-                // Deserialize protocol-specific message from payload
-                match bincode::deserialize(&proto_msg.payload) {
-                    Ok(msg) => {
-                        if protocol_incoming_tx.send(msg).await.is_err() {
-                            break; // Channel closed
-                        }
-                    }
-                    Err(e) => {
-                        tracing::error!("Failed to deserialize DKG message: {}", e);
-                    }
+            while let Ok(router_msg) = incoming_rx.recv().await {
+                tracing::info!(
+                    "📨 [Node {}] Incoming message from party {}, seq={}, payload_size={}",
+                    node_id_for_incoming,
+                    router_msg.from.0 - 1,
+                    router_msg.sequence,
+                    router_msg.payload.len()
+                );
+
+                // Convert RouterProtocolMessage to Cggmp24Message
+                // NOTE: We set recipient=None because RouterProtocolMessage doesn't preserve
+                // whether the original message was broadcast or P2P. The message_router
+                // sends individual copies to each recipient, so we treat all as broadcasts.
+                let cggmp24_msg = Cggmp24Message {
+                    session_id: session_id_for_incoming.clone(),
+                    sender: router_msg.from.0 as u16 - 1, // NodeId starts from 1, party_index from 0
+                    recipient: None, // Treat as broadcast (was incorrectly set to Some before)
+                    round: 0,
+                    payload: router_msg.payload,
+                    seq: router_msg.sequence,
+                };
+                if protocol_incoming_tx.send(cggmp24_msg).await.is_err() {
+                    tracing::warn!("Protocol incoming channel closed");
+                    break;
                 }
             }
+            tracing::info!("Incoming message adapter task finished");
         });
 
-        // Spawn adapter task to convert outgoing protocol messages to ProtocolMessages
-        let (protocol_outgoing_tx, protocol_outgoing_rx) = async_channel::bounded(100);
+        // Spawn adapter task to convert outgoing CGGMP24 messages to RouterProtocolMessages
+        let (protocol_outgoing_tx, protocol_outgoing_rx) = async_channel::bounded::<Cggmp24Message>(100);
         let node_id = self.node_id;
         let session_id_clone = session_id;
         let participants_clone = participants.clone();
         tokio::spawn(async move {
-            let mut sequence = 0u64;
-            while let Ok(msg) = protocol_outgoing_rx.recv().await {
-                // Serialize protocol-specific message to payload
-                let payload = match bincode::serialize(&msg) {
-                    Ok(p) => p,
-                    Err(e) => {
-                        tracing::error!("Failed to serialize DKG message: {}", e);
-                        continue;
+            while let Ok(cggmp24_msg) = protocol_outgoing_rx.recv().await {
+                // Convert Cggmp24Message to RouterProtocolMessage
+                // Handle both broadcast (recipient=None) and unicast (recipient=Some)
+                match cggmp24_msg.recipient {
+                    None => {
+                        // Broadcast to all participants except sender
+                        tracing::info!(
+                            "📤 [Node {}] Broadcasting message seq={}, payload_size={} to {} participants",
+                            node_id,
+                            cggmp24_msg.seq,
+                            cggmp24_msg.payload.len(),
+                            participants_clone.len() - 1
+                        );
+                        for &participant in &participants_clone {
+                            if participant != node_id {
+                                let router_msg = RouterProtocolMessage {
+                                    session_id: session_id_clone,
+                                    from: node_id,
+                                    to: participant,
+                                    payload: cggmp24_msg.payload.clone(),
+                                    sequence: cggmp24_msg.seq,
+                                };
+                                if outgoing_tx.send(router_msg).await.is_err() {
+                                    tracing::error!("Failed to send broadcast message to participant {}", participant);
+                                }
+                            }
+                        }
                     }
-                };
-
-                // Broadcast to all participants
-                for &participant in &participants_clone {
-                    if participant != node_id {
-                        let proto_msg = ProtocolMessage {
+                    Some(recipient_index) => {
+                        // Unicast to specific participant
+                        let recipient = NodeId((recipient_index + 1) as u64); // party_index 0-based, NodeId 1-based
+                        tracing::info!(
+                            "📤 [Node {}] Sending P2P message seq={}, payload_size={} to party {}",
+                            node_id,
+                            cggmp24_msg.seq,
+                            cggmp24_msg.payload.len(),
+                            recipient_index
+                        );
+                        let router_msg = RouterProtocolMessage {
                             session_id: session_id_clone,
                             from: node_id,
-                            to: participant,
-                            payload: payload.clone(),
-                            sequence,
+                            to: recipient,
+                            payload: cggmp24_msg.payload,
+                            sequence: cggmp24_msg.seq,
                         };
-                        if outgoing_tx.send(proto_msg).await.is_err() {
-                            tracing::error!("Failed to send message to participant {}", participant);
+                        if outgoing_tx.send(router_msg).await.is_err() {
+                            tracing::error!("Failed to send unicast message to participant {}", recipient);
                         }
                     }
                 }
-                sequence += 1;
             }
+            tracing::info!("Outgoing message adapter task finished");
         });
 
         // Run the CGGMP24 DKG protocol using existing working implementation
@@ -657,7 +792,7 @@ impl DkgService {
                 // Broadcast to all participants
                 for &participant in &participants_clone {
                     if participant != node_id {
-                        let proto_msg = ProtocolMessage {
+                        let proto_msg = RouterProtocolMessage {
                             session_id: session_id_clone,
                             from: node_id,
                             to: participant,

@@ -279,8 +279,8 @@ pub struct PresignatureUsage {
 }
 
 /// Network message types
+/// Note: Using default bincode serialization (no serde tags) because bincode doesn't support deserialize_any
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
 pub enum NetworkMessage {
     Vote(VoteMessage),
     Heartbeat(HeartbeatMessage),

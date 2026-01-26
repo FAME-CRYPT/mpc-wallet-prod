@@ -24,9 +24,11 @@ pub mod error;
 pub mod handlers;
 pub mod routes;
 pub mod state;
+pub mod middleware;
 
 pub use error::{ApiError, ApiResult};
 pub use state::AppState;
+pub use middleware::{RateLimiter, RateLimitConfig};
 
 /// Create and configure the API router with all endpoints
 pub fn create_router(state: AppState) -> Router {

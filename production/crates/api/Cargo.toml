@@ -47,6 +47,9 @@ hex.workspace = true
 sha2.workspace = true
 ed25519-dalek.workspace = true
 
+# Authentication
+jsonwebtoken = "9.2"
+
 # Metrics
 prometheus = { version = "0.13", features = ["process"] }
 lazy_static = "1.4"

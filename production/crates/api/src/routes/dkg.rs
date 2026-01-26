@@ -11,5 +11,6 @@ use axum::{
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/initiate", post(dkg::initiate_dkg))
+        .route("/join/:session_id", post(dkg::join_dkg))
         .route("/status", get(dkg::dkg_status))
 }

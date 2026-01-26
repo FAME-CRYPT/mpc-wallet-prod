@@ -16,24 +16,82 @@ pub struct ClusterStatus {
 
 /// Get overall cluster health status
 pub async fn get_cluster_status(
-    _postgres: &PostgresStorage,
-    _etcd: &Mutex<EtcdStorage>,
+    postgres: &PostgresStorage,
+    etcd: &Mutex<EtcdStorage>,
 ) -> Result<ClusterStatus, ApiError> {
+    use threshold_types::NodeId;
+
     info!("Fetching cluster status");
 
-    // In production, this would:
-    // 1. Query etcd for cluster configuration
-    // 2. Check node health from PostgreSQL
-    // 3. Calculate overall cluster health
+    // Step 1: Get cluster configuration from etcd (with fallback to defaults)
+    let (total_nodes, threshold) = {
+        let mut etcd_client = etcd.lock().await;
+        match etcd_client.get("/cluster/config").await {
+            Ok(Some(config_bytes)) => {
+                match String::from_utf8(config_bytes) {
+                    Ok(config_str) => {
+                        match serde_json::from_str::<serde_json::Value>(&config_str) {
+                            Ok(config) => {
+                                let total = config["total_nodes"].as_u64().unwrap_or(5) as u32;
+                                let thresh = config["threshold"].as_u64().unwrap_or(3) as u32;
+                                (total, thresh)
+                            }
+                            Err(_) => (5, 3), // Default configuration
+                        }
+                    }
+                    Err(_) => (5, 3), // Failed to parse UTF-8
+                }
+            }
+            Ok(None) | Err(_) => (5, 3), // Default if not set in etcd or error
+        }
+    };
 
-    // For now, return placeholder values
-    // You would implement: etcd.get_cluster_config() and check node health
+    // Step 2: Query actual node health from PostgreSQL
+    let mut healthy_count = 0;
+    let health_threshold_seconds = 60.0; // Consider node healthy if seen in last 60 seconds
+
+    for node_id in 1..=total_nodes {
+        match postgres.get_node_health(NodeId(node_id as u64)).await {
+            Ok(Some(health_data)) => {
+                let seconds_since_heartbeat = health_data["seconds_since_heartbeat"]
+                    .as_f64()
+                    .unwrap_or(9999.0);
+
+                if seconds_since_heartbeat < health_threshold_seconds {
+                    healthy_count += 1;
+                    info!("Node {} is healthy (last seen {:.1}s ago)", node_id, seconds_since_heartbeat);
+                } else {
+                    info!("Node {} is unhealthy (last seen {:.1}s ago)", node_id, seconds_since_heartbeat);
+                }
+            }
+            Ok(None) => {
+                info!("Node {} has no health data - treating as inactive", node_id);
+            }
+            Err(e) => {
+                info!("Error checking health for node {}: {} - treating as inactive", node_id, e);
+            }
+        }
+    }
+
+    // Step 3: Determine overall cluster health status
+    let status = if healthy_count >= threshold {
+        "healthy"
+    } else if healthy_count > 0 {
+        "degraded"
+    } else {
+        "critical"
+    };
+
+    info!(
+        "Cluster status: {}/{} healthy nodes (threshold: {}, status: {})",
+        healthy_count, total_nodes, threshold, status
+    );
 
     Ok(ClusterStatus {
-        total_nodes: 5,
-        healthy_nodes: 5,
-        threshold: 3,
-        status: "healthy".to_string(),
+        total_nodes,
+        healthy_nodes: healthy_count,
+        threshold,
+        status: status.to_string(),
     })
 }
 

@@ -77,6 +77,24 @@ async fn main() -> Result<()> {
         threshold_types::NodeId(config.node_id),
         Some(registry_url.clone()),
     ));
+
+    // Register all peers in the cluster (Docker Compose static setup)
+    info!("Registering peers in the cluster...");
+    for peer_node_id in 1..=config.total_nodes {
+        let peer_id_u64 = peer_node_id as u64;
+        if peer_id_u64 != config.node_id {
+            let hostname = format!("mpc-node-{}", peer_node_id);
+            let peer_port = 5000 + peer_node_id as u16;  // Node 1 -> 5001, Node 2 -> 5002, etc.
+            peer_registry.add_peer(
+                threshold_types::NodeId(peer_id_u64),
+                hostname,
+                peer_port,
+            ).await;
+            info!("Registered peer: node-{} at mpc-node-{}:{}", peer_node_id, peer_node_id, peer_port);
+        }
+    }
+    info!("Peer registry populated with {} peers", config.total_nodes - 1);
+
     let mut quic_engine = QuicEngine::new(
         threshold_types::NodeId(config.node_id),
         peer_registry,
@@ -84,6 +102,12 @@ async fn main() -> Result<()> {
     );
     // Initialize client endpoint for outgoing connections
     quic_engine.init_client().await?;
+
+    // Initialize server endpoint for incoming connections
+    let quic_bind_addr = format!("0.0.0.0:{}", 5000 + config.node_id);  // Node 1 -> 5001, Node 2 -> 5002, etc.
+    quic_engine.init_server(&quic_bind_addr).await?;
+    info!("QUIC server listening on {}", quic_bind_addr);
+
     let quic_engine = Arc::new(quic_engine);
     info!("QUIC engine initialized for DKG service");
 
@@ -93,6 +117,31 @@ async fn main() -> Result<()> {
         threshold_types::NodeId(config.node_id),
     ));
     info!("Message router initialized");
+
+    // Start QUIC listener with MessageRouter integration
+    let message_router_clone = Arc::clone(&message_router);
+    let _listener_handle = quic_engine.start_listener(move |sender_node_id, network_message| {
+        // Dispatch incoming QUIC messages to MessageRouter
+        if let threshold_types::NetworkMessage::Protocol { session_id, from, to, payload } = network_message {
+            let session_id_str = session_id;
+            let sequence = 0; // QUIC layer doesn't track sequence, protocol layer does
+
+            // Spawn async task to handle the message
+            let router = Arc::clone(&message_router_clone);
+            tokio::spawn(async move {
+                if let Err(e) = router.handle_incoming_message(
+                    from,
+                    to,
+                    &session_id_str,
+                    payload,
+                    sequence,
+                ).await {
+                    tracing::warn!("Failed to route incoming message: {}", e);
+                }
+            });
+        }
+    });
+    info!("QUIC listener started, routing messages to MessageRouter");
 
     // Create DKG service
     let dkg_service = DkgService::new(
