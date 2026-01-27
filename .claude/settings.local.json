@@ -111,7 +111,11 @@
       "Bash(__NEW_LINE_f697ce59ab2acfb7__ echo \"\")",
       "Bash(__NEW_LINE_a25190540a36cdb2__ echo \"\")",
       "Bash(TXID=\"b4a7ea9c0fba711f956203eba14f30b230c3c50ec1e0a786bae1d3ce568f3c1c\":*)",
-      "Bash(wait)"
+      "Bash(wait)",
+      "Bash(if [ $? -eq 0 ])",
+      "Bash(then)",
+      "Bash(else)",
+      "Bash(fi)"
     ]
   }
 }
