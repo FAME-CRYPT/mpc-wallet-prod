@@ -294,6 +294,7 @@ pub enum NetworkMessage {
         from: NodeId,
         to: NodeId,
         payload: Vec<u8>,
+        is_broadcast: bool,
     },
 }
 

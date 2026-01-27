@@ -384,6 +384,7 @@ impl PresignatureService {
                                 to: participant,
                                 payload: payload.clone(),
                                 sequence,
+                                is_broadcast: true, // Broadcast to all participants
                             };
                             if outgoing_tx.send(proto_msg).await.is_err() {
                                 tracing::error!("Failed to send message to participant {}", participant);

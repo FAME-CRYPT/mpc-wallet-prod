@@ -797,6 +797,16 @@ impl EtcdStorage {
             Ok(Some(resp.kvs()[0].value().to_vec()))
         }
     }
+
+    /// Delete a key from etcd
+    pub async fn delete(&self, key: &str) -> Result<()> {
+        let mut client = self.client.clone();
+        client
+            .delete(key.as_bytes(), None)
+            .await
+            .map_err(|e| Error::StorageError(format!("Failed to delete key: {}", e)))?;
+        Ok(())
+    }
 }
 
 /// Parse transaction state from string

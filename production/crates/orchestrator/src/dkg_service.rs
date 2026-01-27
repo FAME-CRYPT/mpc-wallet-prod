@@ -271,7 +271,7 @@ impl DkgService {
         // Acquire distributed lock for DKG
         let lock_key = "/locks/dkg";
         let lock_acquired = {
-            let mut etcd = self.etcd.lock().await;
+            let etcd = self.etcd.lock().await;
             etcd.acquire_lock(lock_key, 300) // 5 minute timeout
                 .await
                 .map_err(|e| OrchestrationError::StorageError(format!("Failed to acquire DKG lock: {}", e)))?
@@ -323,7 +323,7 @@ impl DkgService {
 
         // Release lock
         {
-            let mut etcd = self.etcd.lock().await;
+            let etcd = self.etcd.lock().await;
             etcd.release_lock(lock_key)
                 .await
                 .map_err(|e| OrchestrationError::StorageError(format!("Failed to release lock: {}", e)))?;
@@ -356,7 +356,7 @@ impl DkgService {
                 // Store public key in etcd for cluster-wide access
                 let pubkey_key = format!("/cluster/public_keys/{}", protocol);
                 {
-                    let mut etcd = self.etcd.lock().await;
+                    let etcd = self.etcd.lock().await;
                     etcd.put(&pubkey_key, &public_key).await
                         .map_err(|e| OrchestrationError::Storage(e.into()))?;
                 }
@@ -371,7 +371,7 @@ impl DkgService {
                 let config_bytes = serde_json::to_vec(&config)
                     .map_err(|e| OrchestrationError::Internal(format!("JSON serialization failed: {}", e)))?;
                 {
-                    let mut etcd = self.etcd.lock().await;
+                    let etcd = self.etcd.lock().await;
                     etcd.put(&config_key, &config_bytes).await
                         .map_err(|e| OrchestrationError::Storage(e.into()))?;
                 }
@@ -558,6 +558,56 @@ impl DkgService {
                 OrchestrationError::Internal(format!("Failed to register DKG session: {}", e))
             })?;
 
+        // Synchronization barrier: wait for all participants to register their sessions
+        // This prevents messages from being sent before all nodes are ready to receive
+        info!(
+            "🔄 [Node {}] Session registered, waiting for all {} participants to be ready...",
+            self.node_id, total_parties
+        );
+
+        let barrier_key = format!("/dkg/{}/ready/{}", session_id, self.node_id);
+        {
+            let etcd = self.etcd.lock().await;
+            etcd.put(&barrier_key, &[1]).await.map_err(|e| {
+                OrchestrationError::StorageError(format!("Failed to signal ready: {}", e))
+            })?;
+        }
+
+        // Wait for all participants to be ready (with timeout)
+        let ready_timeout = tokio::time::Duration::from_secs(30);
+        let ready_deadline = tokio::time::Instant::now() + ready_timeout;
+
+        loop {
+            let ready_count = {
+                let mut etcd = self.etcd.lock().await;
+                let mut count = 0;
+                for participant in &participants {
+                    let key = format!("/dkg/{}/ready/{}", session_id, participant);
+                    if let Ok(Some(_)) = etcd.get(&key).await {
+                        count += 1;
+                    }
+                }
+                count
+            };
+
+            if ready_count == participants.len() {
+                info!(
+                    "✅ [Node {}] All {} participants ready, starting protocol",
+                    self.node_id, total_parties
+                );
+                break;
+            }
+
+            if tokio::time::Instant::now() > ready_deadline {
+                return Err(OrchestrationError::Internal(format!(
+                    "Timeout waiting for participants to be ready: {}/{} ready",
+                    ready_count, total_parties
+                )));
+            }
+
+            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        }
+
         // Convert between RouterProtocolMessage and CGGMP24 protocol message types
         // Spawn adapter task to convert incoming RouterProtocolMessages to CGGMP24 format
         let (protocol_incoming_tx, protocol_incoming_rx) = async_channel::bounded(100);
@@ -574,13 +624,15 @@ impl DkgService {
                 );
 
                 // Convert RouterProtocolMessage to Cggmp24Message
-                // NOTE: We set recipient=None because RouterProtocolMessage doesn't preserve
-                // whether the original message was broadcast or P2P. The message_router
-                // sends individual copies to each recipient, so we treat all as broadcasts.
+                // Use is_broadcast flag to distinguish broadcast vs P2P messages
                 let cggmp24_msg = Cggmp24Message {
                     session_id: session_id_for_incoming.clone(),
                     sender: router_msg.from.0 as u16 - 1, // NodeId starts from 1, party_index from 0
-                    recipient: None, // Treat as broadcast (was incorrectly set to Some before)
+                    recipient: if router_msg.is_broadcast {
+                        None // Broadcast message
+                    } else {
+                        Some(router_msg.to.0 as u16 - 1) // P2P message to current party
+                    },
                     round: 0,
                     payload: router_msg.payload,
                     seq: router_msg.sequence,
@@ -620,6 +672,7 @@ impl DkgService {
                                     to: participant,
                                     payload: cggmp24_msg.payload.clone(),
                                     sequence: cggmp24_msg.seq,
+                                    is_broadcast: true, // Mark as broadcast
                                 };
                                 if outgoing_tx.send(router_msg).await.is_err() {
                                     tracing::error!("Failed to send broadcast message to participant {}", participant);
@@ -643,6 +696,7 @@ impl DkgService {
                             to: recipient,
                             payload: cggmp24_msg.payload,
                             sequence: cggmp24_msg.seq,
+                            is_broadcast: false, // Mark as P2P
                         };
                         if outgoing_tx.send(router_msg).await.is_err() {
                             tracing::error!("Failed to send unicast message to participant {}", recipient);
@@ -678,12 +732,12 @@ impl DkgService {
             .public_key
             .ok_or_else(|| OrchestrationError::Protocol("No public key generated".to_string()))?;
 
-        // Store key share in PostgreSQL
-        let node_id = NodeId(party_index as u64);
+        // Store key share in PostgreSQL using actual node_id (not party_index)
+        // party_index is 0-based (0,1,2,3,4) but node_id is 1-based (1,2,3,4,5)
         self.postgres
             .store_key_share(
                 session_id,
-                node_id,
+                self.node_id,
                 &key_share_data,
             )
             .await
@@ -695,6 +749,15 @@ impl DkgService {
             "CGGMP24 DKG completed successfully in {:.2}s: session={} pubkey_len={}",
             result.duration_secs, session_id, public_key.len()
         );
+
+        // Clean up synchronization barrier keys from etcd
+        {
+            let etcd = self.etcd.lock().await;
+            for participant in &participants {
+                let key = format!("/dkg/{}/ready/{}", session_id, participant);
+                let _ = etcd.delete(&key).await; // Ignore errors during cleanup
+            }
+        }
 
         // Return compressed public key (33 bytes)
         Ok(public_key)
@@ -753,59 +816,152 @@ impl DkgService {
                 OrchestrationError::Internal(format!("Failed to register DKG session: {}", e))
             })?;
 
-        // Convert between ProtocolMessage and protocol-specific message types
-        // Spawn adapter task to convert incoming ProtocolMessages to protocol format
-        let (protocol_incoming_tx, protocol_incoming_rx) = async_channel::bounded(100);
-        tokio::spawn(async move {
-            while let Ok(proto_msg) = incoming_rx.recv().await {
-                // Deserialize protocol-specific message from payload
-                match bincode::deserialize(&proto_msg.payload) {
-                    Ok(msg) => {
-                        if protocol_incoming_tx.send(msg).await.is_err() {
-                            break; // Channel closed
-                        }
-                    }
-                    Err(e) => {
-                        tracing::error!("Failed to deserialize FROST DKG message: {}", e);
+        // Synchronization barrier: wait for all participants to register their sessions
+        info!(
+            "🔄 [Node {}] Session registered, waiting for all {} participants to be ready...",
+            self.node_id, total_parties
+        );
+
+        let barrier_key = format!("/dkg/{}/ready/{}", session_id, self.node_id);
+        {
+            let etcd = self.etcd.lock().await;
+            etcd.put(&barrier_key, &[1]).await.map_err(|e| {
+                OrchestrationError::StorageError(format!("Failed to signal ready: {}", e))
+            })?;
+        }
+
+        // Wait for all participants to be ready (with timeout)
+        let ready_timeout = tokio::time::Duration::from_secs(30);
+        let ready_deadline = tokio::time::Instant::now() + ready_timeout;
+
+        loop {
+            let ready_count = {
+                let mut etcd = self.etcd.lock().await;
+                let mut count = 0;
+                for participant in &participants {
+                    let key = format!("/dkg/{}/ready/{}", session_id, participant);
+                    if let Ok(Some(_)) = etcd.get(&key).await {
+                        count += 1;
                     }
                 }
+                count
+            };
+
+            if ready_count == participants.len() {
+                info!(
+                    "✅ [Node {}] All {} participants ready, starting protocol",
+                    self.node_id, total_parties
+                );
+                break;
             }
+
+            if tokio::time::Instant::now() > ready_deadline {
+                return Err(OrchestrationError::Internal(format!(
+                    "Timeout waiting for participants to be ready: {}/{} ready",
+                    ready_count, total_parties
+                )));
+            }
+
+            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        }
+
+        // Convert between RouterProtocolMessage and FROST ProtocolMessage
+        // Spawn adapter task to convert incoming RouterProtocolMessages to FROST format
+        let (protocol_incoming_tx, protocol_incoming_rx) = async_channel::bounded::<FrostMessage>(100);
+        let session_id_for_incoming = session_id;
+        let node_id_for_incoming = self.node_id;
+        tokio::spawn(async move {
+            while let Ok(router_msg) = incoming_rx.recv().await {
+                tracing::info!(
+                    "📨 [Node {}] FROST incoming message from party {}, seq={}, payload_size={}",
+                    node_id_for_incoming,
+                    router_msg.from.0 - 1,
+                    router_msg.sequence,
+                    router_msg.payload.len()
+                );
+
+                // Convert RouterProtocolMessage to FrostMessage
+                // Use is_broadcast flag to distinguish broadcast vs P2P messages
+                let frost_msg = FrostMessage {
+                    session_id: session_id_for_incoming.to_string(),
+                    sender: router_msg.from.0 as u16 - 1, // NodeId starts from 1, party_index from 0
+                    recipient: if router_msg.is_broadcast {
+                        None // Broadcast message
+                    } else {
+                        Some(router_msg.to.0 as u16 - 1) // P2P message to current party
+                    },
+                    round: 0,
+                    payload: router_msg.payload,
+                    seq: router_msg.sequence,
+                };
+                if protocol_incoming_tx.send(frost_msg).await.is_err() {
+                    tracing::warn!("Protocol incoming channel closed");
+                    break;
+                }
+            }
+            tracing::info!("Incoming message adapter task finished");
         });
 
-        // Spawn adapter task to convert outgoing protocol messages to ProtocolMessages
-        let (protocol_outgoing_tx, protocol_outgoing_rx) = async_channel::bounded(100);
+        // Spawn adapter task to convert outgoing FROST messages to RouterProtocolMessages
+        let (protocol_outgoing_tx, protocol_outgoing_rx) = async_channel::bounded::<FrostMessage>(100);
         let node_id = self.node_id;
         let session_id_clone = session_id;
         let participants_clone = participants.clone();
         tokio::spawn(async move {
-            let mut sequence = 0u64;
-            while let Ok(msg) = protocol_outgoing_rx.recv().await {
-                // Serialize protocol-specific message to payload
-                let payload = match bincode::serialize(&msg) {
-                    Ok(p) => p,
-                    Err(e) => {
-                        tracing::error!("Failed to serialize FROST DKG message: {}", e);
-                        continue;
+            while let Ok(frost_msg) = protocol_outgoing_rx.recv().await {
+                // Convert FrostMessage to RouterProtocolMessage
+                // Handle both broadcast (recipient=None) and unicast (recipient=Some)
+                match frost_msg.recipient {
+                    None => {
+                        // Broadcast to all participants except sender
+                        tracing::info!(
+                            "📤 [Node {}] FROST Broadcasting message seq={}, payload_size={} to {} participants",
+                            node_id,
+                            frost_msg.seq,
+                            frost_msg.payload.len(),
+                            participants_clone.len() - 1
+                        );
+                        for &participant in &participants_clone {
+                            if participant != node_id {
+                                let router_msg = RouterProtocolMessage {
+                                    session_id: session_id_clone,
+                                    from: node_id,
+                                    to: participant,
+                                    payload: frost_msg.payload.clone(),
+                                    sequence: frost_msg.seq,
+                                    is_broadcast: true, // Mark as broadcast
+                                };
+                                if outgoing_tx.send(router_msg).await.is_err() {
+                                    tracing::error!("Failed to send broadcast message to participant {}", participant);
+                                }
+                            }
+                        }
                     }
-                };
-
-                // Broadcast to all participants
-                for &participant in &participants_clone {
-                    if participant != node_id {
-                        let proto_msg = RouterProtocolMessage {
+                    Some(recipient_index) => {
+                        // Unicast to specific participant
+                        let recipient = NodeId((recipient_index + 1) as u64); // party_index 0-based, NodeId 1-based
+                        tracing::info!(
+                            "📤 [Node {}] FROST Sending P2P message seq={}, payload_size={} to party {}",
+                            node_id,
+                            frost_msg.seq,
+                            frost_msg.payload.len(),
+                            recipient_index
+                        );
+                        let router_msg = RouterProtocolMessage {
                             session_id: session_id_clone,
                             from: node_id,
-                            to: participant,
-                            payload: payload.clone(),
-                            sequence,
+                            to: recipient,
+                            payload: frost_msg.payload,
+                            sequence: frost_msg.seq,
+                            is_broadcast: false, // Mark as P2P
                         };
-                        if outgoing_tx.send(proto_msg).await.is_err() {
-                            tracing::error!("Failed to send message to participant {}", participant);
+                        if outgoing_tx.send(router_msg).await.is_err() {
+                            tracing::error!("Failed to send unicast message to participant {}", recipient);
                         }
                     }
                 }
-                sequence += 1;
             }
+            tracing::info!("Outgoing message adapter task finished");
         });
 
         // Run the FROST DKG protocol using existing working implementation
@@ -833,12 +989,12 @@ impl DkgService {
             .public_key
             .ok_or_else(|| OrchestrationError::Protocol("No public key generated".to_string()))?;
 
-        // Store key share in PostgreSQL
-        let node_id = NodeId(party_index as u64);
+        // Store key share in PostgreSQL using actual node_id (not party_index)
+        // party_index is 0-based (0,1,2,3,4) but node_id is 1-based (1,2,3,4,5)
         self.postgres
             .store_key_share(
                 session_id,
-                node_id,
+                self.node_id,
                 &key_share_data,
             )
             .await
@@ -850,6 +1006,15 @@ impl DkgService {
             "FROST DKG completed successfully in {:.2}s: session={} x_only_pubkey_len={}",
             result.duration_secs, session_id, public_key.len()
         );
+
+        // Clean up synchronization barrier keys from etcd
+        {
+            let etcd = self.etcd.lock().await;
+            for participant in &participants {
+                let key = format!("/dkg/{}/ready/{}", session_id, participant);
+                let _ = etcd.delete(&key).await; // Ignore errors during cleanup
+            }
+        }
 
         // Return x-only public key (32 bytes)
         Ok(public_key)

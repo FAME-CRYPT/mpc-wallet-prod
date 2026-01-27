@@ -78,6 +78,8 @@ pub struct ProtocolMessage {
     pub payload: Vec<u8>,
     /// Message sequence number
     pub sequence: u64,
+    /// Whether this message was originally a broadcast (true) or P2P (false)
+    pub is_broadcast: bool,
 }
 
 /// QUIC Message Router
@@ -232,6 +234,7 @@ impl MessageRouter {
                         from: msg.from,
                         to: msg.to,
                         payload: msg.payload.clone(),
+                        is_broadcast: msg.is_broadcast,
                     };
 
                     // Use stream ID based on session ID hash for consistency
@@ -273,6 +276,7 @@ impl MessageRouter {
         session_id_str: &str,
         payload: Vec<u8>,
         sequence: u64,
+        is_broadcast: bool,
     ) -> Result<()> {
         info!(
             "📨 MessageRouter handling incoming from QUIC: from={} to={} session={}",
@@ -298,6 +302,7 @@ impl MessageRouter {
                     to,
                     payload,
                     sequence,
+                    is_broadcast,
                 };
 
                 info!(
@@ -351,6 +356,7 @@ impl MessageRouter {
                     from: message.from,
                     to: message.to,
                     payload: message.payload.clone(),
+                    is_broadcast: message.is_broadcast,
                 };
 
                 let stream_id = session_id.as_u128() as u64;
