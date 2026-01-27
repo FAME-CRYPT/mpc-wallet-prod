@@ -164,7 +164,10 @@ async fn main() -> Result<()> {
     );
     info!("Aux info service initialized");
 
-    let state = AppState::new(postgres_for_state, etcd_for_state, bitcoin_for_state, dkg_service, aux_info_service);
+    // Create vote trigger channel for automatic voting
+    let (vote_tx, vote_rx) = tokio::sync::mpsc::channel(100);
+
+    let state = AppState::new(postgres_for_state, etcd_for_state, bitcoin_for_state, dkg_service, aux_info_service, vote_tx);
 
     // Parse listen address
     let addr: SocketAddr = config.listen_addr.parse()?;
@@ -189,6 +192,16 @@ async fn main() -> Result<()> {
         let postgres_for_vp = PostgresStorage::new(&config.postgres_config).await?;
         let vote_processor = Arc::new(VoteProcessor::new(etcd_for_vp, postgres_for_vp));
         info!("Vote processor initialized for orchestration");
+
+        // Create AutoVoter for automatic transaction voting
+        let auto_voter = threshold_orchestrator::AutoVoter::new(
+            threshold_types::NodeId(config.node_id),
+            Arc::clone(&postgres),
+            Arc::clone(&vote_processor),
+            vote_rx,
+        );
+        let auto_voter_handle = auto_voter.start();
+        info!("AutoVoter started for node {}", config.node_id);
 
         // Initialize P2P session coordinator with QUIC transport
         use ed25519_dalek::SigningKey;
@@ -289,6 +302,7 @@ async fn main() -> Result<()> {
             .with_bitcoin(Arc::clone(&bitcoin))
             .with_signing_coordinator(Arc::clone(&signing_coordinator))
             .with_protocol_router(Arc::clone(&protocol_router))
+            .with_node_endpoints(config.node_endpoints.clone())
             .build()?;
         let orchestrator_handle = Arc::clone(&orchestrator).start();
         info!("Orchestration service started");

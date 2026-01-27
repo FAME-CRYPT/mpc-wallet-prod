@@ -16,7 +16,9 @@ use threshold_storage::{EtcdStorage, PostgresStorage};
 use threshold_consensus::{VoteProcessor, VoteState};
 use protocols::p2p::P2pSessionCoordinator;
 use threshold_bitcoin::BitcoinClient;
-use threshold_types::{Transaction, TxId, TransactionState, VotingRound};
+use threshold_types::{Transaction, TxId, TransactionState, VotingRound, VoteRequest};
+use std::collections::HashMap;
+use std::time::Duration;
 
 /// Voting completion status
 #[derive(Debug, Clone, PartialEq)]
@@ -60,6 +62,12 @@ pub struct OrchestrationService {
     /// Protocol router for automatic protocol selection.
     protocol_router: Arc<ProtocolRouter>,
 
+    /// HTTP client for broadcasting to nodes.
+    http_client: reqwest::Client,
+
+    /// Node endpoints (node_id -> endpoint URL).
+    node_endpoints: HashMap<u64, String>,
+
     /// Shutdown signal.
     shutdown: Arc<RwLock<bool>>,
 }
@@ -75,6 +83,7 @@ impl OrchestrationService {
         bitcoin: Arc<BitcoinClient>,
         signing_coordinator: Arc<SigningCoordinator>,
         protocol_router: Arc<ProtocolRouter>,
+        node_endpoints: HashMap<u64, String>,
     ) -> Self {
         Self {
             config,
@@ -85,8 +94,32 @@ impl OrchestrationService {
             bitcoin,
             signing_coordinator,
             protocol_router,
+            http_client: reqwest::Client::new(),
+            node_endpoints,
             shutdown: Arc::new(RwLock::new(false)),
         }
+    }
+
+    /// Parse node endpoints from environment variable.
+    /// Format: "1=http://localhost:8081,2=http://localhost:8082,..."
+    pub fn parse_node_endpoints() -> HashMap<u64, String> {
+        let endpoints_str = std::env::var("NODE_ENDPOINTS")
+            .unwrap_or_else(|_| {
+                // Default to 5 nodes on localhost
+                "1=http://localhost:8081,2=http://localhost:8082,3=http://localhost:8083,4=http://localhost:8084,5=http://localhost:8085".to_string()
+            });
+
+        let mut endpoints = HashMap::new();
+        for pair in endpoints_str.split(',') {
+            if let Some((node_id_str, endpoint)) = pair.split_once('=') {
+                if let Ok(node_id) = node_id_str.trim().parse::<u64>() {
+                    endpoints.insert(node_id, endpoint.trim().to_string());
+                }
+            }
+        }
+
+        info!("Parsed {} node endpoints", endpoints.len());
+        endpoints
     }
 
     /// Start the orchestration service.
@@ -231,9 +264,63 @@ impl OrchestrationService {
         self.postgres.update_transaction_state(&tx.txid, TransactionState::Voting).await
             .map_err(|e| OrchestrationError::Storage(e.into()))?;
 
-        // 4. Broadcast vote request to all nodes
-        // NOTE: In production, this would send P2P messages to all nodes
-        // For now, nodes will poll their local databases or receive via P2P receiver
+        // 4. Broadcast vote request to all nodes via HTTP
+        let vote_request = VoteRequest {
+            tx_id: tx.txid.clone(),
+            round_id,
+            round_number: 1,
+            threshold: 4,
+            timeout_at: now + chrono::Duration::seconds(self.config.voting_timeout.as_secs() as i64),
+        };
+
+        // Broadcast to all nodes in parallel
+        let broadcast_futures: Vec<_> = self
+            .node_endpoints
+            .iter()
+            .map(|(node_id, endpoint)| {
+                let client = self.http_client.clone();
+                let url = format!("{}/internal/vote-request", endpoint);
+                let req = vote_request.clone();
+                let node_id = *node_id;
+
+                async move {
+                    match client
+                        .post(&url)
+                        .json(&req)
+                        .timeout(Duration::from_secs(5))
+                        .send()
+                        .await
+                    {
+                        Ok(resp) if resp.status().is_success() => {
+                            info!("Vote request sent to node {}", node_id);
+                            Ok(())
+                        }
+                        Ok(resp) => {
+                            warn!(
+                                "Vote request failed for node {}: status={}",
+                                node_id,
+                                resp.status()
+                            );
+                            Err(())
+                        }
+                        Err(e) => {
+                            error!("Failed to send vote request to node {}: {}", node_id, e);
+                            Err(())
+                        }
+                    }
+                }
+            })
+            .collect();
+
+        // Wait for all broadcasts (don't fail if some nodes are unreachable)
+        let results = futures::future::join_all(broadcast_futures).await;
+        let success_count = results.iter().filter(|r| r.is_ok()).count();
+
+        info!(
+            "Vote request broadcast: {}/{} nodes reached",
+            success_count,
+            self.node_endpoints.len()
+        );
 
         Ok(())
     }
@@ -357,8 +444,19 @@ impl OrchestrationService {
             return Ok(VotingStatus::TimedOut);
         }
 
+        // Get actual vote count from PostgreSQL votes table (more reliable than etcd)
+        let actual_vote_count = self.postgres
+            .count_votes_for_transaction(&tx.txid)
+            .await
+            .map_err(|e| OrchestrationError::Storage(e.into()))?;
+
+        info!(
+            "Vote count for tx {:?}: {} votes (threshold: {})",
+            tx.txid, actual_vote_count, voting_round.threshold
+        );
+
         // Check if threshold reached
-        if voting_round.votes_received >= voting_round.threshold {
+        if actual_vote_count >= voting_round.threshold {
             return Ok(VotingStatus::Approved);
         }
 
@@ -856,6 +954,7 @@ pub struct OrchestrationServiceBuilder {
     bitcoin: Option<Arc<BitcoinClient>>,
     signing_coordinator: Option<Arc<SigningCoordinator>>,
     protocol_router: Option<Arc<ProtocolRouter>>,
+    node_endpoints: Option<HashMap<u64, String>>,
 }
 
 impl OrchestrationServiceBuilder {
@@ -869,6 +968,7 @@ impl OrchestrationServiceBuilder {
             bitcoin: None,
             signing_coordinator: None,
             protocol_router: None,
+            node_endpoints: None,
         }
     }
 
@@ -912,6 +1012,15 @@ impl OrchestrationServiceBuilder {
         self
     }
 
+    pub fn with_node_endpoints(mut self, endpoints: Vec<(u64, String)>) -> Self {
+        let mut map = HashMap::new();
+        for (node_id, endpoint) in endpoints {
+            map.insert(node_id, endpoint);
+        }
+        self.node_endpoints = Some(map);
+        self
+    }
+
     pub fn build(self) -> Result<Arc<OrchestrationService>> {
         Ok(Arc::new(OrchestrationService::new(
             self.config.unwrap_or_default(),
@@ -922,6 +1031,7 @@ impl OrchestrationServiceBuilder {
             self.bitcoin.ok_or_else(|| OrchestrationError::Config("bitcoin required".to_string()))?,
             self.signing_coordinator.ok_or_else(|| OrchestrationError::Config("signing_coordinator required".to_string()))?,
             self.protocol_router.ok_or_else(|| OrchestrationError::Config("protocol_router required".to_string()))?,
+            self.node_endpoints.unwrap_or_else(HashMap::new),
         )))
     }
 }

@@ -221,6 +221,16 @@ impl ByzantineViolation {
     }
 }
 
+/// Request for nodes to vote on a transaction
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VoteRequest {
+    pub tx_id: TxId,
+    pub round_id: i64,
+    pub round_number: u32,
+    pub threshold: u32,
+    pub timeout_at: DateTime<Utc>,
+}
+
 /// Voting round record
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VotingRound {

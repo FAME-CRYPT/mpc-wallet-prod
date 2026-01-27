@@ -1,10 +1,11 @@
 //! Shared application state for the API server
 
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::{mpsc, Mutex};
 use threshold_bitcoin::BitcoinClient;
 use threshold_orchestrator::{DkgService, AuxInfoService};
 use threshold_storage::{EtcdStorage, PostgresStorage};
+use threshold_types::VoteRequest;
 
 /// Shared application state passed to all handlers
 #[derive(Clone)]
@@ -19,6 +20,8 @@ pub struct AppState {
     pub dkg_service: Arc<DkgService>,
     /// Aux info service for auxiliary information generation
     pub aux_info_service: Arc<AuxInfoService>,
+    /// Channel to trigger automatic voting
+    pub vote_trigger: mpsc::Sender<VoteRequest>,
 }
 
 impl AppState {
@@ -29,6 +32,7 @@ impl AppState {
         bitcoin: BitcoinClient,
         dkg_service: DkgService,
         aux_info_service: AuxInfoService,
+        vote_trigger: mpsc::Sender<VoteRequest>,
     ) -> Self {
         Self {
             postgres: Arc::new(postgres),
@@ -36,6 +40,7 @@ impl AppState {
             bitcoin: Arc::new(bitcoin),
             dkg_service: Arc::new(dkg_service),
             aux_info_service: Arc::new(aux_info_service),
+            vote_trigger,
         }
     }
 }

@@ -731,6 +731,31 @@ impl PostgresStorage {
             .collect())
     }
 
+    /// Count votes for a specific transaction
+    pub async fn count_votes_for_transaction(&self, tx_id: &TxId) -> Result<u32> {
+        let client = self
+            .pool
+            .get()
+            .await
+            .map_err(|e| Error::StorageError(format!("Failed to get client: {}", e)))?;
+
+        let row = client
+            .query_one(
+                r#"
+                SELECT COUNT(DISTINCT v.node_id) as vote_count
+                FROM votes v
+                JOIN voting_rounds vr ON v.round_id = vr.id
+                WHERE vr.tx_id = $1
+                "#,
+                &[&tx_id.0],
+            )
+            .await
+            .map_err(|e| Error::StorageError(format!("Failed to count votes: {}", e)))?;
+
+        let count: i64 = row.get(0);
+        Ok(count as u32)
+    }
+
     /// Get signed transaction bytes
     pub async fn get_signed_transaction(&self, tx_id: &TxId) -> Result<Option<Vec<u8>>> {
         let client = self

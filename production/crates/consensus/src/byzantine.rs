@@ -162,6 +162,16 @@ impl ByzantineDetector {
         self.postgres.record_vote(vote).await?;
         self.postgres.update_node_last_seen(&vote.node_id).await?;
 
+        // Update voting_rounds table with new vote count
+        if let Ok(Some(round)) = self.postgres.get_voting_round_by_txid(&vote.tx_id.0).await {
+            let _ = self.postgres.update_voting_round(
+                round.id,
+                new_count as u32,
+                false, // not yet approved
+                false, // not yet completed
+            ).await;
+        }
+
         // Check if threshold reached
         if new_count >= threshold as u64 {
             info!(

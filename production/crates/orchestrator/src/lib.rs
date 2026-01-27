@@ -25,6 +25,7 @@ pub mod presig_service;
 pub mod signing_coordinator;
 pub mod protocol_router;
 pub mod message_router;
+pub mod auto_voter;
 
 pub use config::{OrchestrationConfig, OrchestrationConfigBuilder};
 pub use service::{OrchestrationService, OrchestrationServiceBuilder};
@@ -38,6 +39,7 @@ pub use presig_service::{PresignatureService, PresignatureStats};
 pub use signing_coordinator::{SigningCoordinator, SignatureProtocol, SigningRequest, SignatureShare, CombinedSignature};
 pub use protocol_router::{ProtocolRouter, ProtocolSelection, BitcoinAddressType};
 pub use message_router::{MessageRouter, ProtocolMessage, ProtocolType as MessageProtocolType};
+pub use auto_voter::AutoVoter;
 
 /// Re-export commonly used types
 pub mod prelude {

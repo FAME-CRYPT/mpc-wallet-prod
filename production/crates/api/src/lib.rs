@@ -62,6 +62,7 @@ pub fn create_router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(routes::health::health_check))
         .nest("/api/v1", api_v1)
+        .nest("/internal", routes::internal::routes())
         .layer(
             ServiceBuilder::new()
                 .layer(TraceLayer::new_for_http())

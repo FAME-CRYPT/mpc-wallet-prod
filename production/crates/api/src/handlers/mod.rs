@@ -6,3 +6,4 @@ pub mod wallet;
 pub mod dkg;
 pub mod aux_info;
 pub mod presig;
+pub mod internal;
