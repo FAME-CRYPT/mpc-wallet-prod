@@ -30,16 +30,16 @@ impl AppState {
         postgres: PostgresStorage,
         etcd: EtcdStorage,
         bitcoin: BitcoinClient,
-        dkg_service: DkgService,
-        aux_info_service: AuxInfoService,
+        dkg_service: Arc<DkgService>,
+        aux_info_service: Arc<AuxInfoService>,
         vote_trigger: mpsc::Sender<VoteRequest>,
     ) -> Self {
         Self {
             postgres: Arc::new(postgres),
             etcd: Arc::new(Mutex::new(etcd)),
             bitcoin: Arc::new(bitcoin),
-            dkg_service: Arc::new(dkg_service),
-            aux_info_service: Arc::new(aux_info_service),
+            dkg_service,
+            aux_info_service,
             vote_trigger,
         }
     }

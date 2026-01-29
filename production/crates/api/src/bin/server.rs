@@ -5,6 +5,7 @@
 //! and cluster monitoring.
 
 use anyhow::Result;
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use threshold_api::{start_server, AppState};
@@ -15,9 +16,9 @@ use threshold_consensus::VoteProcessor;
 use protocols::p2p::{P2pSessionCoordinator, QuicTransport};
 use protocols::p2p::certs::{NodeCertificate, StoredNodeCert};
 use threshold_orchestrator::{
-    OrchestrationService, OrchestrationServiceBuilder,
-    TimeoutMonitor, TimeoutMonitorBuilder,
-    HealthChecker, HealthCheckerBuilder,
+    OrchestrationServiceBuilder,
+    TimeoutMonitorBuilder,
+    HealthCheckerBuilder,
     OrchestrationConfig,
     DkgService,
     AuxInfoService,
@@ -54,6 +55,13 @@ async fn main() -> Result<()> {
     info!("Connecting to etcd cluster: {:?}", config.etcd_endpoints);
     let etcd = Arc::new(tokio::sync::Mutex::new(EtcdStorage::new(config.etcd_endpoints.clone()).await?));
     info!("etcd storage initialized");
+
+    // Initialize cluster configuration in etcd on startup
+    {
+        let mut etcd_lock = etcd.lock().await;
+        etcd_lock.set_cluster_threshold(config.threshold).await?;
+        info!("Cluster threshold initialized in etcd: {}", config.threshold);
+    }
 
     // Initialize Bitcoin client
     info!("Initializing Bitcoin client for {:?}", config.bitcoin_network);
@@ -144,30 +152,33 @@ async fn main() -> Result<()> {
     });
     info!("QUIC listener started, routing messages to MessageRouter");
 
-    // Create DKG service
-    let dkg_service = DkgService::new(
+    // Create DKG service (wrapped in Arc for shared access)
+    let node_endpoints_map: HashMap<u64, String> = config.node_endpoints.iter().cloned().collect();
+    let dkg_service = Arc::new(DkgService::new(
         Arc::clone(&postgres),
         Arc::clone(&etcd),
         Arc::clone(&quic_engine),
         Arc::clone(&message_router),
         threshold_types::NodeId(config.node_id),
-    );
+        node_endpoints_map.clone(),
+    ));
     info!("DKG service initialized");
 
-    // Create Aux Info service
-    let aux_info_service = AuxInfoService::new(
+    // Create Aux Info service (wrapped in Arc for shared access)
+    let aux_info_service = Arc::new(AuxInfoService::new(
         Arc::clone(&postgres),
         Arc::clone(&etcd),
         Arc::clone(&quic_engine),
         Arc::clone(&message_router),
         threshold_types::NodeId(config.node_id),
-    );
+        node_endpoints_map.clone(),
+    ));
     info!("Aux info service initialized");
 
     // Create vote trigger channel for automatic voting
     let (vote_tx, vote_rx) = tokio::sync::mpsc::channel(100);
 
-    let state = AppState::new(postgres_for_state, etcd_for_state, bitcoin_for_state, dkg_service, aux_info_service, vote_tx);
+    let state = AppState::new(postgres_for_state, etcd_for_state, bitcoin_for_state, Arc::clone(&dkg_service), Arc::clone(&aux_info_service), vote_tx);
 
     // Parse listen address
     let addr: SocketAddr = config.listen_addr.parse()?;
@@ -258,6 +269,7 @@ async fn main() -> Result<()> {
             Arc::clone(&quic_engine),
             Arc::clone(&message_router),
             threshold_types::NodeId(config.node_id),
+            node_endpoints_map.clone(), // Clone for aux_info_for_presig
         ));
         info!("Aux info service initialized for orchestration");
 
@@ -272,6 +284,21 @@ async fn main() -> Result<()> {
         ));
         info!("Presignature service initialized");
 
+        // Start presignature generation background loop
+        let presig_service_clone = Arc::clone(&presig_service);
+        tokio::spawn(async move {
+            presig_service_clone.run_generation_loop().await;
+        });
+        info!("Presignature generation loop started");
+
+        // Link presignature service to DKG service for automatic presignature generation after DKG
+        dkg_service.set_presignature_service(Arc::clone(&presig_service)).await;
+        info!("Presignature service linked to DKG service");
+
+        // Link aux info service to DKG service for automatic aux info generation after DKG
+        dkg_service.set_aux_info_service(Arc::clone(&aux_info_service)).await;
+        info!("Aux info service linked to DKG service");
+
         // Create signing coordinator for MPC signing protocols
         // SigningCoordinator needs Arc<EtcdStorage>, create fresh instance
         let etcd_for_signing = Arc::new(EtcdStorage::new(config.etcd_endpoints.clone()).await?);
@@ -282,6 +309,7 @@ async fn main() -> Result<()> {
             Arc::clone(&presig_service),
             threshold_types::NodeId(config.node_id),
             config.threshold as usize,
+            node_endpoints_map, // SORUN #17 fix: HTTP broadcast for signing multi-node orchestration
         ));
         info!("Signing coordinator initialized");
 

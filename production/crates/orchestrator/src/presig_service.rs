@@ -28,7 +28,7 @@ use threshold_network::QuicEngine;
 use threshold_storage::{EtcdStorage, PostgresStorage};
 use threshold_types::{NetworkMessage, NodeId, PresignatureId, PresignatureMessage};
 use tokio::sync::{Mutex, RwLock};
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 // Protocol modules
@@ -158,6 +158,25 @@ impl PresignatureService {
     pub async fn run_generation_loop(self: Arc<Self>) {
         info!("Starting presignature generation loop");
 
+        // CLEANUP: Remove any stuck locks from previous sessions on startup
+        // This fixes SORUN #14: Presignature lock stuck after crash/restart
+        info!("Checking for stuck presignature generation locks...");
+        let lock_key = "/locks/presig-generation";
+        {
+            let etcd = self.etcd.lock().await;
+            match etcd.release_lock(lock_key).await {
+                Ok(_) => info!("Cleaned up stuck presignature lock on startup"),
+                Err(e) => {
+                    // Ignore error if lock doesn't exist (expected case)
+                    if !e.to_string().contains("key not found") && !e.to_string().contains("Failed to release lock") {
+                        warn!("Could not cleanup presignature lock: {}", e);
+                    } else {
+                        info!("No stuck lock found (clean startup)");
+                    }
+                }
+            }
+        }
+
         loop {
             tokio::time::sleep(Duration::from_secs(10)).await;
 
@@ -177,22 +196,36 @@ impl PresignatureService {
 
             // Refill if below minimum
             if stats.current_size < self.min_size {
-                let batch_size = (self.target_size - stats.current_size).min(20); // Max 20 per batch
-                warn!(
-                    "Pool below minimum ({} < {}), generating {} presignatures...",
-                    stats.current_size, self.min_size, batch_size
-                );
+                // LEADER ELECTION: Use round-robin based on timestamp to distribute generation work
+                // This prevents all 5 nodes from trying to generate simultaneously (lock collision)
+                let now = chrono::Utc::now();
+                let seconds_since_epoch = now.timestamp() as u64;
+                let round_number = seconds_since_epoch / 10; // Changes every 10 seconds
+                let assigned_node = (round_number % 5) + 1; // Nodes are 1-5
 
-                match self.generate_batch(batch_size).await {
-                    Ok(count) => {
-                        info!("Successfully generated {} presignatures", count);
-                        let mut gen_stats = self.stats.write().await;
-                        gen_stats.total_generated += count as u64;
-                        gen_stats.last_generation = Some(chrono::Utc::now());
+                if self.node_id.0 == assigned_node {
+                    let batch_size = (self.target_size - stats.current_size).min(20); // Max 20 per batch
+                    warn!(
+                        "Node {} selected as leader for this round - Pool below minimum ({} < {}), generating {} presignatures...",
+                        self.node_id.0, stats.current_size, self.min_size, batch_size
+                    );
+
+                    match self.generate_batch(batch_size).await {
+                        Ok(count) => {
+                            info!("Successfully generated {} presignatures", count);
+                            let mut gen_stats = self.stats.write().await;
+                            gen_stats.total_generated += count as u64;
+                            gen_stats.last_generation = Some(chrono::Utc::now());
+                        }
+                        Err(e) => {
+                            error!("Failed to generate presignatures: {}", e);
+                        }
                     }
-                    Err(e) => {
-                        error!("Failed to generate presignatures: {}", e);
-                    }
+                } else {
+                    debug!(
+                        "Node {} not selected for this round (assigned_node={}), skipping generation",
+                        self.node_id.0, assigned_node
+                    );
                 }
             }
 
@@ -207,6 +240,7 @@ impl PresignatureService {
     /// 1. Acquires distributed lock to coordinate with other nodes
     /// 2. Runs CGGMP24 presigning protocol (2 rounds)
     /// 3. Stores presignatures in pool and PostgreSQL
+    /// 4. GUARANTEES lock release even on error (SORUN #14 fix)
     pub async fn generate_batch(&self, count: usize) -> Result<usize> {
         if count == 0 {
             return Ok(0);
@@ -229,7 +263,7 @@ impl PresignatureService {
         // Acquire distributed lock for presignature generation
         let lock_key = "/locks/presig-generation";
         let lock_acquired = {
-            let mut etcd = self.etcd.lock().await;
+            let etcd = self.etcd.lock().await;
             etcd.acquire_lock(lock_key, 300) // 5 minute timeout
                 .await
                 .map_err(|e| {
@@ -242,6 +276,26 @@ impl PresignatureService {
                 "Another presignature generation is in progress".to_string(),
             ));
         }
+
+        // CRITICAL: Guaranteed lock release even on error (fixes SORUN #14)
+        // Execute the actual generation logic and ensure lock is always released
+        let result = self.generate_batch_impl(actual_count, current_size).await;
+
+        // ALWAYS release lock, even if generation failed
+        {
+            let etcd = self.etcd.lock().await;
+            if let Err(e) = etcd.release_lock(lock_key).await {
+                error!("Failed to release presig lock (may cause SORUN #14): {}", e);
+            } else {
+                info!("Released presignature generation lock");
+            }
+        }
+
+        result
+    }
+
+    /// Internal implementation of batch generation (lock already acquired)
+    async fn generate_batch_impl(&self, actual_count: usize, current_size: usize) -> Result<usize> {
 
         // Implement CGGMP24 presignature generation
         // Requirements:
@@ -274,24 +328,24 @@ impl PresignatureService {
             aux_info_data.len()
         );
 
-        // Get key_share from the same session (aux_info and key_share should match)
+        // SORUN #18 FIX: Get latest key_share instead of matching aux_info session
+        // Key_share comes from DKG ceremony (different session), aux_info from aux_info ceremony
+        // We need the most recent key_share regardless of session ID
         let key_share_data = self
             .postgres
-            .get_key_share(aux_info_session_id, self.node_id)
+            .get_latest_key_share(self.node_id)
             .await
             .map_err(|e| {
-                OrchestrationError::StorageError(format!("Failed to get key_share: {}", e))
+                OrchestrationError::StorageError(format!("Failed to get latest key_share: {}", e))
             })?
             .ok_or_else(|| {
-                OrchestrationError::StorageError(format!(
-                    "No key_share found for session {}",
-                    aux_info_session_id
-                ))
+                OrchestrationError::StorageError(
+                    "No key_share found for this node. Run DKG ceremony first.".to_string()
+                )
             })?;
 
         info!(
-            "Using key_share from session {} ({} bytes)",
-            aux_info_session_id,
+            "Using latest key_share from DKG ceremony ({} bytes)",
             key_share_data.len()
         );
 
@@ -456,16 +510,7 @@ impl PresignatureService {
             generated += 1;
         }
 
-        // Release lock
-        {
-            let mut etcd = self.etcd.lock().await;
-            etcd.release_lock(lock_key)
-                .await
-                .map_err(|e| {
-                    OrchestrationError::StorageError(format!("Failed to release presig lock: {}", e))
-                })?;
-        }
-
+        // NOTE: Lock is released in generate_batch() wrapper method
         info!(
             "Successfully generated {} presignatures (pool: {}/{})",
             generated,

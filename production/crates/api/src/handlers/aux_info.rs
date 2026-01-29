@@ -107,3 +107,43 @@ pub async fn aux_info_status(
 
     Ok(Json(response))
 }
+
+/// Join an existing aux_info generation ceremony
+///
+/// POST /internal/aux-info-join
+///
+/// This endpoint is called by participant nodes when they receive a join request
+/// from the coordinator. This fixes SORUN #15.
+pub async fn join_aux_info(
+    State(state): State<AppState>,
+    Json(req): Json<JoinAuxInfoRequest>,
+) -> Result<Json<AuxInfoResponse>, ApiError> {
+    // Parse session ID
+    let session_uuid = uuid::Uuid::parse_str(&req.session_id)
+        .map_err(|_| ApiError::BadRequest("Invalid session ID format".to_string()))?;
+
+    // Join the aux_info ceremony (participant node)
+    let result = state
+        .aux_info_service
+        .join_aux_info_ceremony(session_uuid)
+        .await
+        .map_err(|e| ApiError::InternalError(format!("Failed to join aux_info ceremony: {}", e)))?;
+
+    let response = AuxInfoResponse {
+        success: result.success,
+        session_id: result.session_id.to_string(),
+        party_index: result.party_index,
+        num_parties: result.num_parties,
+        aux_info_size_bytes: result.aux_info_data.as_ref().map(|d| d.len()).unwrap_or(0),
+        error: result.error,
+    };
+
+    Ok(Json(response))
+}
+
+/// Request to join an aux_info ceremony
+#[derive(Debug, Deserialize)]
+pub struct JoinAuxInfoRequest {
+    pub session_id: String,
+    pub num_parties: u16,
+}

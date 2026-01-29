@@ -8,3 +8,4 @@ pub mod dkg;
 pub mod aux_info;
 pub mod presig;
 pub mod internal;
+pub mod metrics;

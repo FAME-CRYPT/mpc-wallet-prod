@@ -61,6 +61,7 @@ pub fn create_router(state: AppState) -> Router {
     // Build the complete router with middleware
     Router::new()
         .route("/health", get(routes::health::health_check))
+        .route("/metrics", get(routes::metrics::prometheus_metrics))
         .nest("/api/v1", api_v1)
         .nest("/internal", routes::internal::routes())
         .layer(

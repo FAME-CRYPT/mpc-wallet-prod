@@ -179,9 +179,18 @@ impl ByzantineDetector {
                 vote.tx_id, vote.value, new_count
             );
 
+            // Update etcd
             self.etcd
                 .set_transaction_state(&vote.tx_id, TransactionState::ThresholdReached)
                 .await?;
+
+            // Update PostgreSQL to "approved" state so orchestration service picks it up
+            self.postgres
+                .update_transaction_state(&vote.tx_id, TransactionState::Approved)
+                .await
+                .map_err(|e| VotingError::StorageError(format!("Failed to update transaction state to approved: {}", e)))?;
+
+            info!("Transaction {:?} approved by consensus (threshold reached)", vote.tx_id);
 
             return Ok(ByzantineCheckResult::ThresholdReached {
                 value: vote.value,

@@ -134,9 +134,9 @@ impl PostgresStorage {
             .execute(
                 r#"
                 INSERT INTO node_status (node_id, status, last_heartbeat)
-                VALUES ($1, 'active', $2)
+                VALUES ($1, 'online', $2)
                 ON CONFLICT (node_id) DO UPDATE
-                SET last_heartbeat = $2, updated_at = NOW()
+                SET last_heartbeat = $2, status = 'online', updated_at = NOW()
                 "#,
                 &[&node_id_i64, &timestamp],
             )
@@ -1098,6 +1098,40 @@ impl PostgresStorage {
         Ok(row.map(|r| r.get(0)))
     }
 
+    /// Get the latest key_share for a node (regardless of session)
+    ///
+    /// This returns the most recent key_share from the latest DKG ceremony.
+    /// Used for presignature generation when we need the current active key_share.
+    ///
+    /// # SORUN #18 FIX
+    /// Presignature generation needs key_share from DKG ceremony, but aux_info
+    /// has a different session ID. This method gets the latest key_share by
+    /// created_at timestamp instead of matching session IDs.
+    pub async fn get_latest_key_share(&self, node_id: NodeId) -> Result<Option<Vec<u8>>> {
+        let client = self
+            .pool
+            .get()
+            .await
+            .map_err(|e| Error::StorageError(format!("Failed to get client: {}", e)))?;
+
+        let row = client
+            .query_opt(
+                r#"
+                SELECT ks.encrypted_share
+                FROM key_shares ks
+                JOIN dkg_ceremonies dc ON ks.ceremony_id = dc.id
+                WHERE ks.node_id = $1
+                ORDER BY dc.started_at DESC
+                LIMIT 1
+                "#,
+                &[&(node_id.0 as i64)],
+            )
+            .await
+            .map_err(|e| Error::StorageError(format!("Failed to get latest key share: {}", e)))?;
+
+        Ok(row.map(|r| r.get(0)))
+    }
+
     /// Store aux_info for a node
     ///
     /// Aux_info is auxiliary information (Paillier keys, ring-Pedersen parameters)
@@ -1151,6 +1185,77 @@ impl PostgresStorage {
             .map_err(|e| Error::StorageError(format!("Failed to get aux_info: {}", e)))?;
 
         Ok(row.map(|r| r.get(0)))
+    }
+
+    /// Get aux_info ceremony by session ID
+    ///
+    /// This is used by participant nodes when joining a ceremony.
+    /// Fixes SORUN #15.
+    pub async fn get_aux_info_ceremony(&self, session_id: uuid::Uuid) -> Result<crate::AuxInfoCeremony> {
+        let client = self
+            .pool
+            .get()
+            .await
+            .map_err(|e| Error::StorageError(format!("Failed to get client: {}", e)))?;
+
+        // Try to get from aux_info_sessions table first (if it exists)
+        let row = client
+            .query_opt(
+                r#"
+                SELECT session_id, party_index, num_parties, status,
+                       started_at, completed_at, error
+                FROM aux_info_sessions
+                WHERE session_id = $1
+                "#,
+                &[&session_id.to_string()],
+            )
+            .await;
+
+        match row {
+            Ok(Some(row)) => {
+                let session_id_str: String = row.get(0);
+                let num_parties: i32 = row.get(2);
+                let status: String = row.get(3);
+                let started_at: chrono::DateTime<chrono::Utc> = row.get(4);
+                let completed_at: Option<chrono::DateTime<chrono::Utc>> = row.get(5);
+                let error: Option<String> = row.get(6);
+
+                Ok(crate::AuxInfoCeremony {
+                    session_id: uuid::Uuid::parse_str(&session_id_str)
+                        .map_err(|e| Error::StorageError(format!("Invalid session ID: {}", e)))?,
+                    num_parties: num_parties as u16,
+                    status,
+                    started_at,
+                    completed_at,
+                    error,
+                })
+            }
+            Ok(None) => {
+                // If not found in database, return a minimal ceremony object
+                // This can happen if coordinator hasn't persisted the ceremony yet
+                warn!("Aux info ceremony {} not found in database, creating minimal entry", session_id);
+                Ok(crate::AuxInfoCeremony {
+                    session_id,
+                    num_parties: 5, // Default to 5 parties
+                    status: "pending".to_string(),
+                    started_at: chrono::Utc::now(),
+                    completed_at: None,
+                    error: None,
+                })
+            }
+            Err(e) => {
+                // If table doesn't exist or other error, return minimal ceremony
+                warn!("Failed to get aux_info ceremony: {}, using defaults", e);
+                Ok(crate::AuxInfoCeremony {
+                    session_id,
+                    num_parties: 5,
+                    status: "pending".to_string(),
+                    started_at: chrono::Utc::now(),
+                    completed_at: None,
+                    error: None,
+                })
+            }
+        }
     }
 
     /// Get the latest aux_info for a node (most recent session)

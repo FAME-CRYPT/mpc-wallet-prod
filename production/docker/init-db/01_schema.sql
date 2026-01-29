@@ -161,6 +161,38 @@ CREATE INDEX idx_key_shares_ceremony_id ON key_shares(ceremony_id);
 CREATE INDEX idx_key_shares_node_id ON key_shares(node_id);
 CREATE INDEX idx_key_shares_created_at ON key_shares(created_at DESC);
 
+-- Aux info table (auxiliary information for CGGMP24 signing)
+CREATE TABLE IF NOT EXISTS aux_info (
+    id BIGSERIAL PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    node_id BIGINT NOT NULL CHECK (node_id > 0),
+    aux_info_data BYTEA NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(session_id, node_id)
+);
+
+CREATE INDEX idx_aux_info_session_id ON aux_info(session_id);
+CREATE INDEX idx_aux_info_node_id ON aux_info(node_id);
+CREATE INDEX idx_aux_info_created_at ON aux_info(created_at DESC);
+
+-- Aux info sessions table (tracking aux_info generation ceremonies)
+CREATE TABLE IF NOT EXISTS aux_info_sessions (
+    id BIGSERIAL PRIMARY KEY,
+    session_id TEXT NOT NULL UNIQUE,
+    party_index INTEGER NOT NULL,
+    num_parties INTEGER NOT NULL CHECK (num_parties > 0),
+    status TEXT NOT NULL CHECK (status IN ('pending', 'generating_primes', 'running', 'completed', 'failed')),
+    started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    completed_at TIMESTAMPTZ,
+    error TEXT,
+    CONSTRAINT valid_party_index CHECK (party_index >= 0 AND party_index < num_parties)
+);
+
+CREATE INDEX idx_aux_info_sessions_session_id ON aux_info_sessions(session_id);
+CREATE INDEX idx_aux_info_sessions_status ON aux_info_sessions(status);
+CREATE INDEX idx_aux_info_sessions_started_at ON aux_info_sessions(started_at DESC);
+
 -- Node status table (for tracking node health)
 CREATE TABLE IF NOT EXISTS node_status (
     id BIGSERIAL PRIMARY KEY,

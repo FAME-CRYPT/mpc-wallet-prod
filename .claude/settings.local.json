@@ -115,7 +115,10 @@
       "Bash(if [ $? -eq 0 ])",
       "Bash(then)",
       "Bash(else)",
-      "Bash(fi)"
+      "Bash(fi)",
+      "Bash(timeout 10 tail:*)",
+      "Bash(timeout 30 tail:*)",
+      "Bash(PARTY_INDEX=0 RUST_LOG=info cargo run:*)"
     ]
   }
 }

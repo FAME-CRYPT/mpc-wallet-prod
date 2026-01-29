@@ -103,6 +103,10 @@ pub struct AuxInfoService {
     active_ceremonies: Arc<RwLock<HashMap<Uuid, AuxInfoCeremony>>>,
     /// Message buffer for protocol messages
     message_buffer: Arc<Mutex<HashMap<Uuid, Vec<ProtocolMessage>>>>,
+    /// HTTP client for broadcasting to nodes
+    http_client: reqwest::Client,
+    /// Node endpoints (node_id -> endpoint URL)
+    node_endpoints: HashMap<u64, String>,
 }
 
 impl AuxInfoService {
@@ -113,6 +117,7 @@ impl AuxInfoService {
         quic: Arc<QuicEngine>,
         message_router: Arc<MessageRouter>,
         node_id: NodeId,
+        node_endpoints: HashMap<u64, String>,
     ) -> Self {
         Self {
             postgres,
@@ -122,6 +127,8 @@ impl AuxInfoService {
             node_id,
             active_ceremonies: Arc::new(RwLock::new(HashMap::new())),
             message_buffer: Arc::new(Mutex::new(HashMap::new())),
+            http_client: reqwest::Client::new(),
+            node_endpoints,
         }
     }
 
@@ -138,7 +145,8 @@ impl AuxInfoService {
         participants: Vec<NodeId>,
     ) -> Result<AuxInfoResult, String> {
         let session_id = Uuid::new_v4();
-        let party_index = self.node_id.0 as u16;
+        // Party index must be 0-indexed (0 to n-1) for round-based protocol
+        let party_index = (self.node_id.0 - 1) as u16;
 
         info!(
             "Initiating aux_info generation ceremony {} with {} parties",
@@ -164,7 +172,10 @@ impl AuxInfoService {
             ceremonies.insert(session_id, ceremony.clone());
         }
 
-        // Step 1: Ensure primes are available
+        // SORUN #16 FIX: Generate primes BEFORE broadcasting to participants
+        // This ensures coordinator is ready before participants start the protocol
+        // Step 1: Ensure primes are available (MOVED BEFORE BROADCAST)
+        info!("Coordinator preparing primes before notifying participants...");
         let primes_data = match self.ensure_primes_available(party_index).await {
             Ok(data) => data,
             Err(e) => {
@@ -175,7 +186,15 @@ impl AuxInfoService {
             }
         };
 
-        // Step 2: Run aux_info generation protocol
+        info!("Primes ready, now broadcasting join request to participants");
+        // Broadcast aux_info join request to all non-coordinator nodes
+        // This is CRITICAL for SORUN #15: Multi-node orchestration
+        if let Err(e) = self.broadcast_aux_info_join_request(session_id, num_parties).await {
+            warn!("Failed to broadcast aux_info join request: {}", e);
+            // Don't fail - coordinator can still proceed if threshold nodes are reachable
+        }
+
+        // Step 2: Run aux_info generation protocol (primes already ready from above)
         self.update_ceremony_status(session_id, AuxInfoStatus::Running)
             .await;
 
@@ -296,72 +315,110 @@ impl AuxInfoService {
             .await
             .map_err(|e| format!("Failed to register aux_info session: {}", e))?;
 
-        // Convert between ProtocolMessage and protocol-specific message types
-        // Spawn adapter task to convert incoming ProtocolMessages to protocol format
+        // Convert between message_router::ProtocolMessage and runner::ProtocolMessage
+        // Spawn adapter task to convert incoming RouterProtocolMessages to runner format
         let (protocol_incoming_tx, protocol_incoming_rx) = async_channel::bounded(100);
         tokio::spawn(async move {
-            while let Ok(proto_msg) = incoming_rx.recv().await {
-                // Deserialize protocol-specific message from payload
-                match bincode::deserialize(&proto_msg.payload) {
-                    Ok(msg) => {
-                        if protocol_incoming_tx.send(msg).await.is_err() {
-                            break; // Channel closed
-                        }
-                    }
-                    Err(e) => {
-                        tracing::error!("Failed to deserialize aux_info message: {}", e);
-                    }
+            while let Ok(router_msg) = incoming_rx.recv().await {
+                // Convert from message_router::ProtocolMessage to runner::ProtocolMessage
+                let protocol_msg = ProtocolMessage {
+                    session_id: router_msg.session_id.to_string(),
+                    sender: (router_msg.from.0 as u16).saturating_sub(1), // NodeId starts from 1, party_index from 0
+                    recipient: if router_msg.is_broadcast {
+                        None // Broadcast message
+                    } else {
+                        Some((router_msg.to.0 as u16).saturating_sub(1)) // P2P message
+                    },
+                    round: 0,
+                    payload: router_msg.payload,
+                    seq: router_msg.sequence,
+                };
+                if protocol_incoming_tx.send(protocol_msg).await.is_err() {
+                    break; // Channel closed
                 }
             }
         });
 
-        // Spawn adapter task to convert outgoing protocol messages to ProtocolMessages
-        let (protocol_outgoing_tx, protocol_outgoing_rx) = async_channel::bounded(100);
+        // Spawn adapter task to convert outgoing protocol messages to RouterProtocolMessages
+        let (protocol_outgoing_tx, protocol_outgoing_rx) = async_channel::bounded::<ProtocolMessage>(100);
         let node_id = self.node_id;
         let session_id_clone = session_id;
         let participants_clone = participants.clone();
         tokio::spawn(async move {
-            let mut sequence = 0u64;
-            while let Ok(msg) = protocol_outgoing_rx.recv().await {
-                // Serialize protocol-specific message to payload
-                let payload = match bincode::serialize(&msg) {
-                    Ok(p) => p,
-                    Err(e) => {
-                        tracing::error!("Failed to serialize aux_info message: {}", e);
-                        continue;
+            while let Ok(proto_msg) = protocol_outgoing_rx.recv().await {
+                // Convert ProtocolMessage to RouterProtocolMessage
+                // Handle both broadcast (recipient=None) and unicast (recipient=Some)
+                match proto_msg.recipient {
+                    None => {
+                        // Broadcast to all participants except sender
+                        tracing::info!(
+                            "📤 [Node {}] Broadcasting aux_info message seq={}, payload_size={} to {} participants",
+                            node_id,
+                            proto_msg.seq,
+                            proto_msg.payload.len(),
+                            participants_clone.len() - 1
+                        );
+                        for &participant in &participants_clone {
+                            if participant != node_id {
+                                let router_msg = RouterProtocolMessage {
+                                    session_id: session_id_clone,
+                                    from: node_id,
+                                    to: participant,
+                                    payload: proto_msg.payload.clone(),
+                                    sequence: proto_msg.seq,
+                                    is_broadcast: true, // Mark as broadcast
+                                };
+                                if outgoing_tx.send(router_msg).await.is_err() {
+                                    tracing::error!("Failed to send broadcast message to participant {}", participant);
+                                }
+                            }
+                        }
                     }
-                };
-
-                // Broadcast to all participants
-                for &participant in &participants_clone {
-                    if participant != node_id {
-                        let proto_msg = RouterProtocolMessage {
+                    Some(recipient_index) => {
+                        // Unicast to specific participant
+                        let recipient = NodeId((recipient_index + 1) as u64); // party_index 0-based, NodeId 1-based
+                        tracing::info!(
+                            "📤 [Node {}] Sending P2P aux_info message seq={}, payload_size={} to party {}",
+                            node_id,
+                            proto_msg.seq,
+                            proto_msg.payload.len(),
+                            recipient_index
+                        );
+                        let router_msg = RouterProtocolMessage {
                             session_id: session_id_clone,
                             from: node_id,
-                            to: participant,
-                            payload: payload.clone(),
-                            sequence,
-                            is_broadcast: true, // Broadcast to all participants
+                            to: recipient,
+                            payload: proto_msg.payload,
+                            sequence: proto_msg.seq,
+                            is_broadcast: false, // Mark as P2P
                         };
-                        if outgoing_tx.send(proto_msg).await.is_err() {
-                            tracing::error!("Failed to send message to participant {}", participant);
+                        if outgoing_tx.send(router_msg).await.is_err() {
+                            tracing::error!("Failed to send unicast message to participant {}", recipient);
                         }
                     }
                 }
-                sequence += 1;
             }
+            tracing::info!("Outgoing aux_info adapter task finished");
         });
 
         // Run the protocol using the runner from protocols crate
-        let result = protocols::cggmp24::runner::run_aux_info_gen(
-            party_index,
-            num_parties,
-            &session_id.to_string(),
-            primes_data,
-            protocol_incoming_rx,
-            protocol_outgoing_tx,
-        )
-        .await;
+        // SORUN #16 FIX: 240 second timeout to handle staggered primes generation
+        let result = match tokio::time::timeout(
+            tokio::time::Duration::from_secs(240),
+            protocols::cggmp24::runner::run_aux_info_gen(
+                party_index,
+                num_parties,
+                &session_id.to_string(),
+                primes_data,
+                protocol_incoming_rx,
+                protocol_outgoing_tx,
+            )
+        ).await {
+            Ok(result) => result,
+            Err(_) => {
+                return Err("Aux info generation timed out after 240 seconds".to_string());
+            }
+        };
 
         if result.success {
             result
@@ -450,5 +507,190 @@ impl AuxInfoService {
     pub async fn list_ceremonies(&self) -> Vec<AuxInfoCeremony> {
         let ceremonies = self.active_ceremonies.read().await;
         ceremonies.values().cloned().collect()
+    }
+
+    /// Broadcast aux_info join request to all participant nodes
+    ///
+    /// This sends HTTP POST requests to all non-coordinator nodes to notify them
+    /// to join the aux_info generation ceremony. This fixes SORUN #15.
+    async fn broadcast_aux_info_join_request(
+        &self,
+        session_id: Uuid,
+        num_parties: u16,
+    ) -> Result<(), String> {
+        use serde::{Deserialize, Serialize};
+        use std::time::Duration;
+
+        #[derive(Debug, Clone, Serialize, Deserialize)]
+        struct AuxInfoJoinRequest {
+            session_id: String,
+            num_parties: u16,
+        }
+
+        let join_request = AuxInfoJoinRequest {
+            session_id: session_id.to_string(),
+            num_parties,
+        };
+
+        // Broadcast to all nodes except coordinator (this node)
+        let broadcast_futures: Vec<_> = self
+            .node_endpoints
+            .iter()
+            .filter(|(node_id, _)| **node_id != self.node_id.0)
+            .map(|(node_id, endpoint)| {
+                let client = self.http_client.clone();
+                let url = format!("{}/internal/aux-info-join", endpoint);
+                let req = join_request.clone();
+                let node_id = *node_id;
+
+                async move {
+                    match client
+                        .post(&url)
+                        .json(&req)
+                        .timeout(Duration::from_secs(5))
+                        .send()
+                        .await
+                    {
+                        Ok(resp) if resp.status().is_success() => {
+                            info!("Aux_info join request sent to node {}", node_id);
+                            Ok(())
+                        }
+                        Ok(resp) => {
+                            warn!(
+                                "Aux_info join request failed for node {}: status={}",
+                                node_id,
+                                resp.status()
+                            );
+                            Err(())
+                        }
+                        Err(e) => {
+                            error!("Failed to send aux_info join request to node {}: {}", node_id, e);
+                            Err(())
+                        }
+                    }
+                }
+            })
+            .collect();
+
+        // Wait for all broadcasts (don't fail if some nodes are unreachable)
+        let results = futures::future::join_all(broadcast_futures).await;
+        let success_count = results.iter().filter(|r| r.is_ok()).count();
+
+        info!(
+            "Aux_info join request broadcast: {}/{} nodes reached",
+            success_count,
+            self.node_endpoints.len() - 1 // Exclude coordinator
+        );
+
+        Ok(())
+    }
+
+    /// Join an existing aux_info generation ceremony as a participant
+    ///
+    /// This is called by non-coordinator nodes when they receive a join request.
+    /// This fixes SORUN #15 by allowing all nodes to participate in the ceremony.
+    pub async fn join_aux_info_ceremony(&self, session_id: Uuid) -> Result<AuxInfoResult, String> {
+        info!("Joining aux_info ceremony: session_id={}", session_id);
+
+        // Read ceremony details from PostgreSQL (created by coordinator)
+        let ceremony_data = self.postgres
+            .get_aux_info_ceremony(session_id)
+            .await
+            .map_err(|e| format!("Ceremony not found: {}", e))?;
+
+        // Party index must be 0-indexed (0 to n-1) for round-based protocol
+        let party_index = (self.node_id.0 - 1) as u16;
+        let num_parties = ceremony_data.num_parties;
+
+        // Build participants list
+        let participants: Vec<NodeId> = (1..=num_parties)
+            .map(|i| NodeId(i as u64))
+            .collect();
+
+        // Store in active ceremonies (for tracking)
+        {
+            let mut ceremonies = self.active_ceremonies.write().await;
+            ceremonies.insert(session_id, AuxInfoCeremony {
+                session_id,
+                party_index,
+                num_parties,
+                participants: participants.clone(),
+                status: AuxInfoStatus::Pending,
+                started_at: ceremony_data.started_at,
+                completed_at: None,
+                aux_info_data: None,
+                error: None,
+            });
+        }
+
+        // Step 1: Ensure primes are available
+        let primes_data = match self.ensure_primes_available(party_index).await {
+            Ok(data) => data,
+            Err(e) => {
+                error!("Failed to get primes: {}", e);
+                self.update_ceremony_status(session_id, AuxInfoStatus::Failed(e.clone()))
+                    .await;
+                return Err(e);
+            }
+        };
+
+        // Step 2: Run aux_info generation protocol (same as coordinator, but as participant)
+        self.update_ceremony_status(session_id, AuxInfoStatus::Running)
+            .await;
+
+        let result = self
+            .run_aux_info_protocol(session_id, party_index, num_parties, &primes_data, participants)
+            .await;
+
+        match result {
+            Ok(aux_info_data) => {
+                // Step 3: Store aux_info in PostgreSQL
+                if let Err(e) = self
+                    .store_aux_info(session_id, party_index, &aux_info_data)
+                    .await
+                {
+                    error!("Failed to store aux_info: {}", e);
+                    self.update_ceremony_status(
+                        session_id,
+                        AuxInfoStatus::Failed(format!("Storage failed: {}", e)),
+                    )
+                    .await;
+                    return Err(format!("Failed to store aux_info: {}", e));
+                }
+
+                // Update ceremony as completed
+                self.update_ceremony_status(session_id, AuxInfoStatus::Completed)
+                    .await;
+                {
+                    let mut ceremonies = self.active_ceremonies.write().await;
+                    if let Some(ceremony) = ceremonies.get_mut(&session_id) {
+                        ceremony.aux_info_data = Some(aux_info_data.clone());
+                        ceremony.completed_at = Some(chrono::Utc::now());
+                    }
+                }
+
+                Ok(AuxInfoResult {
+                    session_id,
+                    party_index,
+                    num_parties,
+                    success: true,
+                    aux_info_data: Some(aux_info_data),
+                    error: None,
+                })
+            }
+            Err(e) => {
+                error!("Aux_info generation failed: {}", e);
+                self.update_ceremony_status(session_id, AuxInfoStatus::Failed(e.clone()))
+                    .await;
+                Ok(AuxInfoResult {
+                    session_id,
+                    party_index,
+                    num_parties,
+                    success: false,
+                    aux_info_data: None,
+                    error: Some(e),
+                })
+            }
+        }
     }
 }

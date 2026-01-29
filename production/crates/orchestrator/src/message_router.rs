@@ -118,8 +118,9 @@ impl MessageRouter {
         participants: Vec<NodeId>,
     ) -> Result<(Sender<ProtocolMessage>, Receiver<ProtocolMessage>)> {
         // Create channels for this session
-        let (incoming_tx, incoming_rx) = async_channel::bounded(100);
-        let (outgoing_tx, outgoing_rx) = async_channel::bounded(100);
+        // SORUN #16 FIX: Increased buffer size to prevent backpressure hangs
+        let (incoming_tx, incoming_rx) = async_channel::bounded(1000);
+        let (outgoing_tx, outgoing_rx) = async_channel::bounded(1000);
 
         // Store session info
         let participant_count = participants.len();

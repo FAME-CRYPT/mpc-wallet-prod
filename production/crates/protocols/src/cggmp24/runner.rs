@@ -145,6 +145,10 @@ impl<M: DeserializeOwned> Stream for IncomingStream<M> {
             Poll::Ready(Some(msg)) => {
                 // Filter by session
                 if msg.session_id != *this.session_id {
+                    warn!(
+                        "Skipping message from wrong session: got {} expected {}",
+                        msg.session_id, this.session_id
+                    );
                     cx.waker().wake_by_ref();
                     return Poll::Pending;
                 }

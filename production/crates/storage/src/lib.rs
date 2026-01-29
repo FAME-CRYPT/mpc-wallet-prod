@@ -17,3 +17,14 @@ pub struct DkgCeremony {
     pub completed_at: Option<chrono::DateTime<chrono::Utc>>,
     pub error: Option<String>,
 }
+
+/// Aux info ceremony status
+#[derive(Debug, Clone)]
+pub struct AuxInfoCeremony {
+    pub session_id: uuid::Uuid,
+    pub num_parties: u16,
+    pub status: String,
+    pub started_at: chrono::DateTime<chrono::Utc>,
+    pub completed_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub error: Option<String>,
+}

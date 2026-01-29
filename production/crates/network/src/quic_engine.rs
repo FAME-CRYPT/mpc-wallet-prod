@@ -367,7 +367,8 @@ impl QuicEngine {
             // Spawn task to handle this stream
             let handler_clone = Arc::clone(&message_handler);
             tokio::spawn(async move {
-                info!("📥 QuicEngine: Receiving message on unidirectional stream");
+                let stream_id_val = recv.id();
+                info!("📥 QuicEngine: Receiving message on unidirectional stream (stream_id={:?})", stream_id_val);
 
                 // Read stream ID (8 bytes) + message length (4 bytes) + message
                 let mut header = vec![0u8; 12];
@@ -379,8 +380,9 @@ impl QuicEngine {
                     }
                 }
 
-                let _stream_id = u64::from_be_bytes(header[0..8].try_into().unwrap());
+                let custom_stream_id = u64::from_be_bytes(header[0..8].try_into().unwrap());
                 let msg_len = u32::from_be_bytes(header[8..12].try_into().unwrap()) as usize;
+                info!("📥 QuicEngine: Stream {:?} - custom_id={} msg_len={}", stream_id_val, custom_stream_id, msg_len);
 
                 // Read message payload
                 let mut buffer = vec![0u8; msg_len];
@@ -413,7 +415,12 @@ impl QuicEngine {
                     }
                 };
 
-                info!("📥 QuicEngine: Dispatching message from {}", sender_node_id);
+                // Log session_id for tracking
+                let session_info = match &message {
+                    NetworkMessage::Protocol { session_id, .. } => format!("session={}", session_id),
+                    _ => "non-protocol".to_string(),
+                };
+                info!("📥 QuicEngine: Dispatching message from {} (stream={:?}, {})", sender_node_id, stream_id_val, session_info);
 
                 // Dispatch message via callback
                 handler_clone(sender_node_id, message);

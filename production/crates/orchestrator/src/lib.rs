@@ -26,6 +26,7 @@ pub mod signing_coordinator;
 pub mod protocol_router;
 pub mod message_router;
 pub mod auto_voter;
+pub mod metrics;
 
 pub use config::{OrchestrationConfig, OrchestrationConfigBuilder};
 pub use service::{OrchestrationService, OrchestrationServiceBuilder};

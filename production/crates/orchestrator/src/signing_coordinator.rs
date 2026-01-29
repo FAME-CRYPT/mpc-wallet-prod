@@ -14,6 +14,7 @@
 
 use crate::error::{OrchestrationError, Result};
 use crate::presig_service::PresignatureService;
+use crate::metrics;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -118,6 +119,10 @@ pub struct SigningCoordinator {
     active_sessions: Arc<RwLock<Vec<SigningSession>>>,
     /// Signature share buffer (session_id -> shares)
     share_buffer: Arc<Mutex<std::collections::HashMap<Uuid, Vec<SignatureShare>>>>,
+    /// HTTP client for broadcasting to nodes
+    http_client: reqwest::Client,
+    /// Node endpoints (node_id -> endpoint URL)
+    node_endpoints: std::collections::HashMap<u64, String>,
 }
 
 impl SigningCoordinator {
@@ -129,6 +134,7 @@ impl SigningCoordinator {
         presig_service: Arc<PresignatureService>,
         node_id: NodeId,
         threshold: usize,
+        node_endpoints: std::collections::HashMap<u64, String>,
     ) -> Self {
         Self {
             quic,
@@ -139,6 +145,8 @@ impl SigningCoordinator {
             threshold,
             active_sessions: Arc::new(RwLock::new(Vec::new())),
             share_buffer: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            http_client: reqwest::Client::new(),
+            node_endpoints,
         }
     }
 
@@ -166,19 +174,22 @@ impl SigningCoordinator {
         // Create signing session
         let session_id = Uuid::new_v4();
 
-        // Acquire presignature if using CGGMP24
+        // Acquire presignature if using CGGMP24 (with fallback to slow-path)
         let presignature_id = if protocol == SignatureProtocol::CGGMP24 {
             match self.presig_service.acquire_presignature().await {
                 Ok(presig_id) => {
-                    info!("Acquired presignature: {}", presig_id);
+                    info!("Acquired presignature: {} (fast-path signing)", presig_id);
                     Some(presig_id)
                 }
                 Err(e) => {
-                    error!("Failed to acquire presignature: {}", e);
-                    return Err(OrchestrationError::Internal(format!(
-                        "No presignatures available: {}",
+                    warn!(
+                        "Failed to acquire presignature: {} - falling back to slow-path signing (~2s)",
                         e
-                    )));
+                    );
+                    // Fallback: Continue without presignature (slow-path)
+                    // CGGMP24 protocol supports both fast-path (with presignature) and slow-path (without)
+                    // Fast-path: ~500ms, Slow-path: ~2000ms
+                    None
                 }
             }
         } else {
@@ -236,17 +247,25 @@ impl SigningCoordinator {
         self.verify_signature(unsigned_tx, &signature, protocol)?;
 
         let duration_ms = start.elapsed().as_millis() as u64;
+        let duration_secs = duration_ms as f64 / 1000.0;
 
         info!(
             "Signing completed: protocol={} duration={}ms tx_id={}",
             protocol, duration_ms, tx_id
         );
 
+        // Record metrics
+        metrics::SIGNING_DURATION.observe(duration_secs);
+        metrics::record_signing_result(&protocol.to_string(), true);
+
         // Cleanup session
         {
             let mut sessions = self.active_sessions.write().await;
             sessions.retain(|s| s.session_id != session_id);
         }
+
+        // Update active sessions metric
+        metrics::ACTIVE_SIGNING_SESSIONS.set(self.active_sessions.read().await.len() as i64);
 
         Ok(CombinedSignature {
             signature,
@@ -258,6 +277,14 @@ impl SigningCoordinator {
 
     /// Broadcast signing request to all nodes
     async fn broadcast_signing_request(&self, request: &SigningRequest) -> Result<()> {
+        // CRITICAL FIX FOR SORUN #17: HTTP broadcast to all nodes first
+        // This ensures all nodes receive the signing request and can participate
+        if let Err(e) = self.http_broadcast_signing_join(request).await {
+            warn!("Failed to HTTP broadcast signing join: {}", e);
+            // Don't fail - coordinator can still proceed via QUIC if some nodes are reachable
+        }
+
+        // Then send via QUIC for actual protocol messages
         let msg = NetworkMessage::SigningRound(SigningMessage {
             tx_id: request.tx_id.clone(),
             round: 1,
@@ -276,6 +303,83 @@ impl SigningCoordinator {
         info!(
             "Broadcasted signing request: session={} protocol={}",
             request.session_id, request.protocol
+        );
+
+        Ok(())
+    }
+
+    /// HTTP broadcast signing join request to all participant nodes
+    ///
+    /// This sends HTTP POST requests to all non-coordinator nodes to notify them
+    /// to join the signing ceremony. This fixes SORUN #17.
+    async fn http_broadcast_signing_join(&self, request: &SigningRequest) -> Result<()> {
+        use std::time::Duration as StdDuration;
+
+        #[derive(Debug, Clone, Serialize, Deserialize)]
+        struct SigningJoinRequest {
+            session_id: String,
+            tx_id: String,
+            protocol: String,
+            unsigned_tx: Vec<u8>,
+            message_hash: Vec<u8>,
+        }
+
+        let join_request = SigningJoinRequest {
+            session_id: request.session_id.to_string(),
+            tx_id: request.tx_id.to_string(),
+            protocol: request.protocol.to_string(),
+            unsigned_tx: request.unsigned_tx.clone(),
+            message_hash: request.message_hash.clone(),
+        };
+
+        // Broadcast to all nodes except coordinator (this node)
+        let broadcast_futures: Vec<_> = self
+            .node_endpoints
+            .iter()
+            .filter(|(node_id, _)| **node_id != self.node_id.0)
+            .map(|(node_id, endpoint)| {
+                let client = self.http_client.clone();
+                let url = format!("{}/internal/signing-join", endpoint);
+                let req = join_request.clone();
+                let node_id = *node_id;
+
+                async move {
+                    match client
+                        .post(&url)
+                        .json(&req)
+                        .timeout(StdDuration::from_secs(5))
+                        .send()
+                        .await
+                    {
+                        Ok(resp) if resp.status().is_success() => {
+                            info!("Signing join request sent to node {}", node_id);
+                            Ok(())
+                        }
+                        Ok(resp) => {
+                            warn!(
+                                "Signing join request failed for node {}: status={}",
+                                node_id,
+                                resp.status()
+                            );
+                            Err(())
+                        }
+                        Err(e) => {
+                            error!("Failed to send signing join request to node {}: {}", node_id, e);
+                            Err(())
+                        }
+                    }
+                }
+            })
+            .collect();
+
+        // Wait for all broadcasts (don't fail if some nodes are unreachable)
+        let results = futures::future::join_all(broadcast_futures).await;
+        let success_count = results.iter().filter(|r| r.is_ok()).count();
+
+        info!(
+            "Signing join request broadcast: {}/{} nodes reached",
+            success_count,
+            self.node_endpoints.len() - 1 // Exclude coordinator
         );
 
         Ok(())

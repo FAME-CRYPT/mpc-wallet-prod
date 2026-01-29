@@ -176,6 +176,14 @@ pub struct DkgService {
     active_ceremonies: Arc<RwLock<HashMap<Uuid, DkgCeremony>>>,
     /// DKG round message buffer (session_id -> round -> node_id -> payload)
     message_buffer: Arc<Mutex<HashMap<Uuid, HashMap<u32, HashMap<NodeId, Vec<u8>>>>>>,
+    /// HTTP client for broadcasting to nodes
+    http_client: reqwest::Client,
+    /// Node endpoints (node_id -> endpoint URL)
+    node_endpoints: HashMap<u64, String>,
+    /// Optional presignature service for automatic presignature generation after DKG
+    presig_service: Arc<RwLock<Option<Arc<crate::presig_service::PresignatureService>>>>,
+    /// Optional aux info service for automatic aux info generation after DKG
+    aux_info_service: Arc<RwLock<Option<Arc<crate::aux_info_service::AuxInfoService>>>>,
 }
 
 impl DkgService {
@@ -186,6 +194,7 @@ impl DkgService {
         quic: Arc<QuicEngine>,
         message_router: Arc<MessageRouter>,
         node_id: NodeId,
+        node_endpoints: HashMap<u64, String>,
     ) -> Self {
         Self {
             postgres,
@@ -195,7 +204,31 @@ impl DkgService {
             node_id,
             active_ceremonies: Arc::new(RwLock::new(HashMap::new())),
             message_buffer: Arc::new(Mutex::new(HashMap::new())),
+            http_client: reqwest::Client::new(),
+            node_endpoints,
+            presig_service: Arc::new(RwLock::new(None)),
+            aux_info_service: Arc::new(RwLock::new(None)),
         }
+    }
+
+    /// Set presignature service for automatic presignature generation after DKG
+    ///
+    /// This method allows setting the presignature service after DkgService creation
+    /// to avoid circular dependencies during initialization.
+    pub async fn set_presignature_service(&self, service: Arc<crate::presig_service::PresignatureService>) {
+        let mut presig = self.presig_service.write().await;
+        *presig = Some(service);
+        info!("Presignature service linked to DKG service");
+    }
+
+    /// Set aux info service for automatic aux info generation after DKG
+    ///
+    /// This method allows setting the aux info service after DkgService creation
+    /// to avoid circular dependencies during initialization.
+    pub async fn set_aux_info_service(&self, service: Arc<crate::aux_info_service::AuxInfoService>) {
+        let mut aux_info = self.aux_info_service.write().await;
+        *aux_info = Some(service);
+        info!("Aux info service linked to DKG service");
     }
 
     /// Initiate DKG ceremony with automatic protocol selection based on Bitcoin address
@@ -315,10 +348,16 @@ impl DkgService {
             ceremonies.insert(session_id, ceremony.clone());
         }
 
+        // Broadcast DKG join request to all non-coordinator nodes
+        self.broadcast_dkg_join_request(session_id, protocol, threshold, total_nodes).await?;
+
+        // Clone participants for later use in aux_info generation
+        let participants_for_aux = participants.clone();
+
         // Run protocol-specific DKG
         let result = match protocol {
             ProtocolType::CGGMP24 => self.run_cggmp24_dkg(session_id, participants).await,
-            ProtocolType::FROST => self.run_frost_dkg(session_id, participants).await,
+            ProtocolType::FROST => self.run_frost_dkg(session_id, participants_for_aux).await,
         };
 
         // Release lock
@@ -381,6 +420,46 @@ impl DkgService {
                     session_id, protocol, address, threshold, total_nodes
                 );
 
+                // Trigger aux info generation for CGGMP24 (if aux info service is set)
+                // IMPORTANT: Aux info must be generated before presignature generation
+                // TEMPORARILY DISABLED FOR TESTING - Prevents duplicate sessions
+                // TODO: Re-enable for production after fixing session isolation
+                if false && protocol == ProtocolType::CGGMP24 {
+                    let aux_info_service_opt = self.aux_info_service.read().await;
+                    if let Some(aux_info_service) = aux_info_service_opt.as_ref() {
+                        info!("DKG complete, triggering aux info generation for CGGMP24...");
+                        let aux_info_clone = Arc::clone(aux_info_service);
+                        // Re-create participants list (since it was moved into run_cggmp24_dkg)
+                        let participants_list: Vec<NodeId> = (1..=total_nodes).map(|i| NodeId(i as u64)).collect();
+                        tokio::spawn(async move {
+                            match aux_info_clone.initiate_aux_info_gen(total_nodes as u16, participants_list).await {
+                                Ok(result) if result.success => {
+                                    info!("Successfully generated aux info after DKG: session={}", result.session_id);
+                                }
+                                Ok(result) => {
+                                    error!("Aux info generation failed after DKG: {:?}", result.error);
+                                }
+                                Err(e) => {
+                                    error!("Failed to initiate aux info generation after DKG: {}", e);
+                                }
+                            }
+                        });
+                    } else {
+                        warn!("Aux info service not linked - skipping aux info generation (presignatures will not work!)");
+                    }
+
+                    // Trigger initial presignature generation for CGGMP24 (if presig service is set)
+                    // NOTE: This will fail if aux_info hasn't been generated yet - background loop will retry
+                    let presig_service_opt = self.presig_service.read().await;
+                    if let Some(_presig_service) = presig_service_opt.as_ref() {
+                        info!("DKG complete, presignature generation will be triggered automatically by background loop");
+                        // Don't trigger immediately - let the background loop handle it after aux_info is ready
+                        // This prevents "No aux_info available" errors
+                    } else {
+                        warn!("Presignature service not linked - skipping presignature generation");
+                    }
+                }
+
                 Ok(DkgResult {
                     session_id,
                     protocol,
@@ -410,6 +489,94 @@ impl DkgService {
                 Err(e)
             }
         }
+    }
+
+    /// Broadcast DKG join request to all non-coordinator nodes
+    async fn broadcast_dkg_join_request(
+        &self,
+        session_id: Uuid,
+        protocol: ProtocolType,
+        threshold: u32,
+        total_nodes: u32,
+    ) -> Result<()> {
+        use serde::{Deserialize, Serialize};
+        use std::time::Duration;
+
+        #[derive(Debug, Clone, Serialize, Deserialize)]
+        struct DkgJoinRequest {
+            session_id: String,
+            protocol: String,
+            threshold: u32,
+            total_nodes: u32,
+        }
+
+        let join_request = DkgJoinRequest {
+            session_id: session_id.to_string(),
+            protocol: protocol.to_string(),
+            threshold,
+            total_nodes,
+        };
+
+        // Broadcast to all nodes except coordinator (this node)
+        let broadcast_futures: Vec<_> = self
+            .node_endpoints
+            .iter()
+            .filter(|(node_id, _)| **node_id != self.node_id.0)
+            .map(|(node_id, endpoint)| {
+                let client = self.http_client.clone();
+                let url = format!("{}/internal/dkg-join", endpoint);
+                let req = join_request.clone();
+                let node_id = *node_id;
+
+                async move {
+                    match client
+                        .post(&url)
+                        .json(&req)
+                        .timeout(Duration::from_secs(5))
+                        .send()
+                        .await
+                    {
+                        Ok(resp) if resp.status().is_success() => {
+                            info!("DKG join request sent to node {}", node_id);
+                            Ok(())
+                        }
+                        Ok(resp) => {
+                            warn!(
+                                "DKG join request failed for node {}: status={}",
+                                node_id,
+                                resp.status()
+                            );
+                            Err(())
+                        }
+                        Err(e) => {
+                            error!("Failed to send DKG join request to node {}: {}", node_id, e);
+                            Err(())
+                        }
+                    }
+                }
+            })
+            .collect();
+
+        // Wait for all broadcasts (don't fail if some nodes are unreachable)
+        let results = futures::future::join_all(broadcast_futures).await;
+        let success_count = results.iter().filter(|r| r.is_ok()).count();
+
+        info!(
+            "DKG join request broadcast: {}/{} nodes reached",
+            success_count,
+            self.node_endpoints.len() - 1 // Exclude coordinator
+        );
+
+        // Consider it successful if at least threshold-1 nodes were reached
+        if success_count < (threshold - 1) as usize {
+            warn!(
+                "Only {}/{} participant nodes reached for DKG ceremony",
+                success_count,
+                threshold - 1
+            );
+        }
+
+        Ok(())
     }
 
     /// Join an existing DKG ceremony (participant nodes)

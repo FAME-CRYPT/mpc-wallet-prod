@@ -6,6 +6,7 @@ use crate::config::OrchestrationConfig;
 use crate::error::{OrchestrationError, Result};
 use crate::signing_coordinator::{SigningCoordinator, SigningRequest, SignatureProtocol};
 use crate::protocol_router::ProtocolRouter;
+use crate::metrics;
 use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinHandle;
@@ -31,6 +32,18 @@ enum VotingStatus {
     Pending,
     /// Voting timed out
     TimedOut,
+}
+
+/// Transaction state summary for monitoring
+#[derive(Debug, Clone)]
+struct TransactionStateSummary {
+    pending: usize,
+    voting: usize,
+    approved: usize,
+    signing: usize,
+    signed: usize,
+    broadcasting: usize,
+    confirmed: usize,
 }
 
 /// Main orchestration service.
@@ -146,6 +159,7 @@ impl OrchestrationService {
     /// Main orchestration loop.
     async fn run(&self) -> Result<()> {
         let mut interval = interval(self.config.poll_interval);
+        let mut iteration = 0u64;
 
         loop {
             // Check shutdown signal
@@ -155,6 +169,35 @@ impl OrchestrationService {
             }
 
             interval.tick().await;
+            iteration += 1;
+
+            // Update orchestration iteration metric
+            metrics::ORCHESTRATION_ITERATIONS.set(iteration as i64);
+
+            // Log orchestration heartbeat every 10 iterations (~50 seconds)
+            if iteration % 10 == 0 {
+                info!("Orchestration heartbeat: iteration={}", iteration);
+
+                // Log transaction counts by state for monitoring
+                if let Ok(states) = self.get_transaction_state_summary().await {
+                    info!(
+                        "Transaction states: pending={} voting={} approved={} signing={} signed={} broadcasting={} confirmed={}",
+                        states.pending, states.voting, states.approved, states.signing,
+                        states.signed, states.broadcasting, states.confirmed
+                    );
+
+                    // Update transaction state metrics
+                    metrics::update_tx_state_metrics(
+                        states.pending,
+                        states.voting,
+                        states.approved,
+                        states.signing,
+                        states.signed,
+                        states.broadcasting,
+                        states.confirmed,
+                    );
+                }
+            }
 
             // Process pending transactions
             if let Err(e) = self.process_pending_transactions().await {
@@ -171,10 +214,12 @@ impl OrchestrationService {
                 error!("Error processing approved transactions: {}", e);
             }
 
-            // Process signing-ready transactions
-            if let Err(e) = self.process_signing_ready_transactions().await {
-                error!("Error processing signing: {}", e);
-            }
+            // DISABLED: Old signing flow that skips approved state and conflicts with new MPC signing
+            // This function was for mock signing and directly transitions threshold_reached -> signing
+            // without running real MPC signing. The correct flow is: approved -> signing (via process_approved_transactions)
+            // if let Err(e) = self.process_signing_ready_transactions().await {
+            //     error!("Error processing signing: {}", e);
+            // }
 
             // Process signing transactions (NEW: signing -> signed)
             if let Err(e) = self.process_signing_transactions().await {
@@ -511,11 +556,25 @@ impl OrchestrationService {
         info!("Transitioned to signing state: {:?}", tx.txid);
 
         // Step 2: Automatic protocol selection based on recipient address
-        let protocol_selection = self.protocol_router
-            .route(&tx.recipient)
-            .map_err(|e| OrchestrationError::Internal(format!(
-                "Protocol selection failed: {}", e
-            )))?;
+        let protocol_selection = match self.protocol_router.route(&tx.recipient) {
+            Ok(selection) => selection,
+            Err(e) => {
+                error!(
+                    "Protocol selection failed for tx {}: {} - rolling back to approved state",
+                    tx.txid, e
+                );
+                // Rollback to approved state
+                if let Err(rollback_err) = self.postgres
+                    .update_transaction_state(&tx.txid, TransactionState::Approved)
+                    .await
+                {
+                    error!("Failed to rollback transaction {} to approved: {}", tx.txid, rollback_err);
+                }
+                return Err(OrchestrationError::Internal(format!(
+                    "Protocol selection failed: {}", e
+                )));
+            }
+        };
 
         info!(
             "Selected protocol: {:?} for address type: {:?} (recipient: {})",
@@ -530,16 +589,32 @@ impl OrchestrationService {
             protocol_selection.protocol
         );
 
-        let combined_signature = self.signing_coordinator
+        let combined_signature = match self.signing_coordinator
             .sign_transaction(
                 &tx.txid,
                 &tx.unsigned_tx,
                 protocol_selection.protocol,
             )
             .await
-            .map_err(|e| OrchestrationError::Internal(format!(
-                "MPC signing failed: {}", e
-            )))?;
+        {
+            Ok(sig) => sig,
+            Err(e) => {
+                error!(
+                    "MPC signing failed for tx {}: {} - rolling back to approved state",
+                    tx.txid, e
+                );
+                // CRITICAL: Rollback to approved state for retry
+                if let Err(rollback_err) = self.postgres
+                    .update_transaction_state(&tx.txid, TransactionState::Approved)
+                    .await
+                {
+                    error!("Failed to rollback transaction {} to approved: {}", tx.txid, rollback_err);
+                }
+                return Err(OrchestrationError::Internal(format!(
+                    "MPC signing failed: {}", e
+                )));
+            }
+        };
 
         info!(
             "MPC signing completed successfully: signature_len={} bytes",
@@ -547,17 +622,38 @@ impl OrchestrationService {
         );
 
         // Step 4: Encode signature into Bitcoin transaction witness format
-        let signed_tx = self.encode_bitcoin_witness(
+        let signed_tx = match self.encode_bitcoin_witness(
             &tx.unsigned_tx,
             &combined_signature.signature,
             protocol_selection.protocol,
-        )?;
+        ) {
+            Ok(tx) => tx,
+            Err(e) => {
+                error!(
+                    "Failed to encode Bitcoin witness for tx {}: {} - rolling back to approved state",
+                    tx.txid, e
+                );
+                // Rollback to approved state
+                if let Err(rollback_err) = self.postgres
+                    .update_transaction_state(&tx.txid, TransactionState::Approved)
+                    .await
+                {
+                    error!("Failed to rollback transaction {} to approved: {}", tx.txid, rollback_err);
+                }
+                return Err(e);
+            }
+        };
 
         // Step 5: Store the signed transaction bytes
         self.postgres
             .set_signed_transaction(&tx.txid, &signed_tx)
             .await
-            .map_err(|e| OrchestrationError::Storage(e.into()))?;
+            .map_err(|e| {
+                // Note: At this point signing succeeded, we just failed to store it
+                // Log error but don't rollback - the signed_tx exists
+                error!("Failed to store signed transaction for {}: {}", tx.txid, e);
+                OrchestrationError::Storage(e.into())
+            })?;
 
         info!("Stored signed transaction for: {:?}", tx.txid);
 
@@ -684,10 +780,47 @@ impl OrchestrationService {
             .map_err(|e| OrchestrationError::Storage(e.into()))?;
 
         if signed_tx.is_none() {
-            return Err(OrchestrationError::InvalidState(
-                format!("{:?}", tx.txid),
-                "signed_tx is None in signing state".to_string(),
-            ));
+            // Stuck transaction detected: signing state but no signed_tx
+            warn!(
+                "Transaction {} stuck in signing state with NULL signed_tx (state: {}, updated_at: {})",
+                tx.txid, tx.state, tx.updated_at
+            );
+
+            // Check how long it's been stuck
+            let now = chrono::Utc::now();
+            let stuck_duration = now - tx.updated_at;
+
+            if stuck_duration > chrono::Duration::seconds(300) {
+                // Stuck for more than 5 minutes - rollback to approved for retry
+                error!(
+                    "Transaction {} stuck for {} seconds, rolling back to approved state",
+                    tx.txid,
+                    stuck_duration.num_seconds()
+                );
+
+                self.postgres
+                    .update_transaction_state(&tx.txid, TransactionState::Approved)
+                    .await
+                    .map_err(|e| {
+                        error!("Failed to rollback stuck transaction {}: {}", tx.txid, e);
+                        OrchestrationError::Storage(e.into())
+                    })?;
+
+                info!(
+                    "Rolled back stuck transaction {} to approved state for retry",
+                    tx.txid
+                );
+
+                return Ok(());
+            } else {
+                // Give it more time (less than 5 minutes)
+                debug!(
+                    "Transaction {} in signing state for {} seconds, waiting...",
+                    tx.txid,
+                    stuck_duration.num_seconds()
+                );
+                return Ok(());
+            }
         }
 
         // Transition to signed
@@ -832,6 +965,42 @@ impl OrchestrationService {
         }
 
         Ok(())
+    }
+
+    /// Get transaction state summary for monitoring.
+    async fn get_transaction_state_summary(&self) -> Result<TransactionStateSummary> {
+        // Query counts for each state
+        let pending = self.postgres.get_transactions_by_state("pending").await
+            .map(|txs| txs.len())
+            .unwrap_or(0);
+        let voting = self.postgres.get_transactions_by_state("voting").await
+            .map(|txs| txs.len())
+            .unwrap_or(0);
+        let approved = self.postgres.get_transactions_by_state("approved").await
+            .map(|txs| txs.len())
+            .unwrap_or(0);
+        let signing = self.postgres.get_transactions_by_state("signing").await
+            .map(|txs| txs.len())
+            .unwrap_or(0);
+        let signed = self.postgres.get_transactions_by_state("signed").await
+            .map(|txs| txs.len())
+            .unwrap_or(0);
+        let broadcasting = self.postgres.get_transactions_by_state("broadcasting").await
+            .map(|txs| txs.len())
+            .unwrap_or(0);
+        let confirmed = self.postgres.get_transactions_by_state("confirmed").await
+            .map(|txs| txs.len())
+            .unwrap_or(0);
+
+        Ok(TransactionStateSummary {
+            pending,
+            voting,
+            approved,
+            signing,
+            signed,
+            broadcasting,
+            confirmed,
+        })
     }
 
     /// Request graceful shutdown.

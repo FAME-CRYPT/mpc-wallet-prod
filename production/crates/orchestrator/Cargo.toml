@@ -31,6 +31,10 @@ uuid = { version = "1.6", features = ["v4", "serde"] }
 # HTTP client for health checks
 reqwest = { version = "0.12", features = ["json"] }
 
+# Metrics
+prometheus = "0.13"
+lazy_static = "1.4"
+
 # Internal dependencies
 threshold-storage = { path = "../storage" }
 threshold-consensus = { path = "../consensus" }
